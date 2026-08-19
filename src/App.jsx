@@ -393,7 +393,7 @@ export default function App() {
       fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif" }}>
       {/* Header */}
       <header className="sticky top-0 z-30" style={{ background: t.paper, borderBottom: `1px solid ${t.line}` }}>
-        <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between gap-2">
+        <div className="px-4 md:px-8 py-3 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2.5 min-w-0">
             <div className="flex items-center justify-center rounded-2xl flex-shrink-0" style={{ width: 40, height: 40, background: t.primary }}>
               <Sprout size={22} color="#fff" />
@@ -409,14 +409,14 @@ export default function App() {
           </div>
         </div>
         {session === null && (
-          <div className="max-w-3xl mx-auto px-4 pb-2" style={{ fontSize: 12, color: t.sub }}>
+          <div className="px-4 md:px-8 pb-2" style={{ fontSize: 12, color: t.sub }}>
             Viewing only — sign in to make changes.
           </div>
         )}
       </header>
 
       {/* Body */}
-      <main className="max-w-3xl mx-auto px-4 pb-28 pt-4">
+      <main className="px-4 md:px-8 pb-28 pt-4">
         {view === "dashboard" && <Dashboard {...shared} />}
         {view === "itinerary" && <Itinerary {...shared} />}
         {view === "calendar" && <CalendarView {...shared} />}
@@ -427,7 +427,7 @@ export default function App() {
 
       {/* Bottom nav */}
       <nav className="fixed bottom-0 left-0 right-0 z-40" style={{ background: t.paper2, borderTop: `1px solid ${t.line}` }}>
-        <div className="max-w-3xl mx-auto grid grid-cols-6">
+        <div className="grid grid-cols-6">
           {NAV.map(({ id, label, Icon }) => {
             const active = view === id;
             return (
@@ -695,7 +695,7 @@ function DayMap({ t, stops, planPreview }) {
   if (!stops || stops.length === 0) return null;
   const bounds = stops.map((s) => [s.lat, s.lng]);
   return (
-    <div className="rounded-2xl overflow-hidden sm:w-64 flex-shrink-0" style={{ height: 200, border: `1px solid ${t.line}` }}>
+    <div className="rounded-2xl overflow-hidden sm:w-1/2 flex-shrink-0" style={{ height: 200, border: `1px solid ${t.line}`, position: "relative", zIndex: 0 }}>
       <MapContainer bounds={bounds} boundsOptions={{ padding: [28, 28] }} scrollWheelZoom={false} style={{ height: "100%", width: "100%" }}>
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
