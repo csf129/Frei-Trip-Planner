@@ -442,6 +442,7 @@ export default function App() {
 function AuthControl({ t, session }) {
   const [open, setOpen] = useState(false);
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [status, setStatus] = useState("");
 
   if (session === undefined) return null; // still checking
@@ -456,11 +457,12 @@ function AuthControl({ t, session }) {
     );
   }
 
-  const sendLink = async () => {
-    if (!email.trim()) return;
-    setStatus("Sending…");
-    const { error } = await supabase.auth.signInWithOtp({ email: email.trim() });
-    setStatus(error ? error.message : "Check your email for a sign-in link.");
+  const signIn = async () => {
+    if (!email.trim() || !password) return;
+    setStatus("Signing in…");
+    const { error } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    setStatus(error ? error.message : "");
+    if (!error) { setOpen(false); setPassword(""); }
   };
 
   return (
@@ -475,8 +477,12 @@ function AuthControl({ t, session }) {
           <Field label="Email" t={t}>
             <input style={inputStyle(t)} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@example.com" />
           </Field>
-          <Btn t={t} small onClick={sendLink} style={{ width: "100%", justifyContent: "center" }}>Send sign-in link</Btn>
-          {status && <div style={{ fontSize: 11.5, color: t.sub, marginTop: 8, lineHeight: 1.4 }}>{status}</div>}
+          <Field label="Password" t={t}>
+            <input style={inputStyle(t)} type="password" value={password} onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && signIn()} placeholder="••••••••" />
+          </Field>
+          <Btn t={t} small onClick={signIn} style={{ width: "100%", justifyContent: "center" }}>Sign in</Btn>
+          {status && <div style={{ fontSize: 11.5, color: t.danger, marginTop: 8, lineHeight: 1.4 }}>{status}</div>}
         </div>
       )}
     </div>
