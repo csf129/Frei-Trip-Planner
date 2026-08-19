@@ -6,7 +6,7 @@ import {
   Car, FileText, Snowflake, Compass, Home,
   ChevronLeft, ChevronRight, Circle, CheckCircle2, PiggyBank,
   DollarSign, Clock, Luggage, Camera, Flag, Info, Heart,
-  Save, ListChecks, LayoutDashboard, ChevronDown,
+  Save, ListChecks, LayoutDashboard, ChevronDown, Ticket, Upload, Loader2, Plane,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RTooltip } from "recharts";
 import { MapContainer, TileLayer, Marker, Tooltip as LeafletTooltip, Polyline } from "react-leaflet";
@@ -210,6 +210,7 @@ const seedTrip = () => ({
     ],
     expenses: [],
   },
+  reservations: [],
 });
 
 const seedState = () => ({
@@ -382,6 +383,7 @@ export default function App() {
     { id: "itinerary", label: "Trip", Icon: MapIcon },
     { id: "calendar", label: "Calendar", Icon: CalendarIcon },
     { id: "todos", label: "Checklist", Icon: ListChecks },
+    { id: "reservations", label: "Reserved", Icon: Ticket },
     { id: "budget", label: "Budget", Icon: Wallet },
     { id: "settings", label: "Settings", Icon: SettingsIcon },
   ];
@@ -421,13 +423,14 @@ export default function App() {
         {view === "itinerary" && <Itinerary {...shared} />}
         {view === "calendar" && <CalendarView {...shared} />}
         {view === "todos" && <Todos {...shared} />}
+        {view === "reservations" && <Reservations {...shared} />}
         {view === "budget" && <Budget {...shared} />}
         {view === "settings" && <SettingsView {...shared} addTrip={addTrip} removeTrip={removeTrip} setActiveTrip={setActiveTrip} />}
       </main>
 
       {/* Bottom nav */}
       <nav className="fixed bottom-0 left-0 right-0 z-40" style={{ background: t.paper2, borderTop: `1px solid ${t.line}` }}>
-        <div className="grid grid-cols-6">
+        <div className="grid grid-cols-7">
           {NAV.map(({ id, label, Icon }) => {
             const active = view === id;
             return (
@@ -1040,6 +1043,169 @@ function TodoEditModal({ todo, onClose, onSave, onDelete, t }) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  RESERVATIONS                                                       */
+/* ------------------------------------------------------------------ */
+const RESERVATION_TYPES = ["Hotel", "Ferry", "Tour", "Flight", "Car Rental", "Other"];
+const RES_TYPE_ICON = { Hotel: Home, Ferry: Ship, Tour: Camera, Flight: Plane, "Car Rental": Car, Other: FileText };
+const blankReservation = () => ({
+  type: "Hotel", title: "", host: "", location: "", confirmationNumber: "",
+  startDate: "", endDate: "", startTime: "", endTime: "", dayId: "", notes: "", filePath: null,
+});
+
+function Reservations({ t, trip, updateTrip, canEdit }) {
+  const [edit, setEdit] = useState(null);
+  if (!trip) return null;
+  const list = trip.reservations || [];
+
+  const save = (r) => {
+    if (r.id) updateTrip({ reservations: list.map((x) => x.id === r.id ? r : x) });
+    else updateTrip({ reservations: [...list, { ...r, id: uid() }] });
+    setEdit(null);
+  };
+  const del = (id) => { updateTrip({ reservations: list.filter((x) => x.id !== id) }); setEdit(null); };
+
+  const sorted = [...list].sort((a, b) => (a.startDate || "9").localeCompare(b.startDate || "9"));
+
+  return (
+    <div className="space-y-4">
+      <SectionHeader t={t} title="Reservations" sub={`${list.length} tracked`}
+        action={canEdit && <Btn t={t} small onClick={() => setEdit(blankReservation())}><Plus size={15} /> Add</Btn>} />
+
+      {sorted.length === 0 ? (
+        <Card t={t} style={{ padding: 30, textAlign: "center" }}>
+          <Ticket size={30} color={t.line} className="mx-auto mb-2" />
+          <div style={{ fontSize: 13, color: t.sub, lineHeight: 1.4 }}>
+            No reservations tracked yet.{canEdit ? " Add hotels, ferries, tours — anything that needs a confirmation number." : ""}
+          </div>
+        </Card>
+      ) : (
+        <div className="space-y-2">
+          {sorted.map((r) => (
+            <ReservationRow key={r.id} r={r} t={t} trip={trip} onEdit={canEdit ? () => setEdit(r) : undefined} />
+          ))}
+        </div>
+      )}
+
+      <ReservationEditModal reservation={edit} onClose={() => setEdit(null)} onSave={save} onDelete={del} t={t} trip={trip} />
+    </div>
+  );
+}
+
+function ReservationRow({ r, t, trip, onEdit }) {
+  const Icon = RES_TYPE_ICON[r.type] || FileText;
+  const day = trip.days.find((d) => d.id === r.dayId);
+  return (
+    <Card t={t} style={{ padding: 0 }} onClick={onEdit}>
+      <div className="flex items-start gap-3 px-3.5 py-3" style={{ cursor: onEdit ? "pointer" : "default" }}>
+        <div className="flex items-center justify-center rounded-lg flex-shrink-0" style={{ width: 34, height: 34, background: t.primarySoft }}>
+          <Icon size={16} color={t.primaryDark} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="truncate" style={{ fontSize: 14, fontWeight: 600, color: t.ink }}>{r.title || r.type}</div>
+          {(r.host || r.location) && (
+            <div className="truncate" style={{ fontSize: 12, color: t.sub, marginTop: 1 }}>
+              {r.host}{r.host && r.location ? " · " : ""}{r.location}
+            </div>
+          )}
+          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+            <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5" style={{ fontSize: 10.5, fontWeight: 600, background: t.primarySoft, color: t.primaryDark }}>{r.type}</span>
+            {r.startDate && (
+              <span style={{ fontSize: 11, color: t.sub, fontWeight: 600 }}>
+                {fmtShort(r.startDate)}{r.endDate && r.endDate !== r.startDate ? ` – ${fmtShort(r.endDate)}` : ""}{r.startTime ? ` · ${r.startTime}` : ""}
+              </span>
+            )}
+            {r.confirmationNumber && <span style={{ fontSize: 11, color: t.sub }}>Conf# {r.confirmationNumber}</span>}
+            {day && <span style={{ fontSize: 11, color: t.primary, fontWeight: 600 }}>Day {day.n}</span>}
+          </div>
+        </div>
+        {onEdit && <Pencil size={15} color={t.sub} style={{ flexShrink: 0 }} />}
+      </div>
+    </Card>
+  );
+}
+
+function ReservationEditModal({ reservation, onClose, onSave, onDelete, t, trip }) {
+  const [r, setR] = useState(reservation);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
+  useEffect(() => { setR(reservation); setStatus(""); }, [reservation]);
+  if (!reservation || !r) return null;
+
+  const handleFile = async (file) => {
+    if (!file) return;
+    setBusy(true);
+    setStatus("Uploading…");
+    try {
+      const path = `${trip.id}/${uid()}-${file.name}`;
+      const { error: upErr } = await supabase.storage.from("reservation-files").upload(path, file, { upsert: false });
+      if (upErr) throw upErr;
+      setStatus("Reading with AI…");
+      const { data, error: fnErr } = await supabase.functions.invoke("parse-reservation", { body: { path } });
+      if (fnErr) throw fnErr;
+      if (data?.error) throw new Error(data.error);
+      setR((prev) => ({
+        ...prev,
+        ...Object.fromEntries(Object.entries(data).filter(([, v]) => v !== "" && v != null)),
+        filePath: path,
+      }));
+      setStatus("AI-filled below — please check before saving.");
+    } catch (e) {
+      setStatus("Couldn't read that file: " + (e.message || String(e)));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal open={!!reservation} onClose={onClose} title={reservation.id ? "Edit reservation" : "New reservation"} t={t} wide>
+      <div className="rounded-2xl px-3 py-3 mb-3" style={{ background: t.paper2, border: `1px dashed ${t.line}` }}>
+        <label className="flex items-center gap-2 justify-center" style={{ fontSize: 13, fontWeight: 600, color: t.primary, cursor: busy ? "default" : "pointer" }}>
+          {busy ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
+          {busy ? "Working…" : "Upload a screenshot or file — AI fills in the fields"}
+          <input type="file" accept="image/*,.pdf" className="hidden" disabled={busy} onChange={(e) => handleFile(e.target.files?.[0])} />
+        </label>
+        {status && <div style={{ fontSize: 11.5, color: t.sub, marginTop: 6, textAlign: "center" }}>{status}</div>}
+      </div>
+
+      <Field label="Type" t={t}>
+        <select style={inputStyle(t)} value={r.type} onChange={(e) => setR({ ...r, type: e.target.value })}>
+          {RESERVATION_TYPES.map((x) => <option key={x}>{x}</option>)}
+        </select>
+      </Field>
+      <Field label="Title" t={t}><input style={inputStyle(t)} value={r.title} onChange={(e) => setR({ ...r, title: e.target.value })} placeholder="e.g. Baddeck Hotel" /></Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Host / provider" t={t}><input style={inputStyle(t)} value={r.host} onChange={(e) => setR({ ...r, host: e.target.value })} /></Field>
+        <Field label="Location" t={t}><input style={inputStyle(t)} value={r.location} onChange={(e) => setR({ ...r, location: e.target.value })} /></Field>
+      </div>
+      <Field label="Confirmation number" t={t}><input style={inputStyle(t)} value={r.confirmationNumber} onChange={(e) => setR({ ...r, confirmationNumber: e.target.value })} /></Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Start date" t={t}><input type="date" style={inputStyle(t)} value={r.startDate} onChange={(e) => setR({ ...r, startDate: e.target.value })} /></Field>
+        <Field label="End date" t={t}><input type="date" style={inputStyle(t)} value={r.endDate} onChange={(e) => setR({ ...r, endDate: e.target.value })} /></Field>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Start time" t={t}><input type="time" style={inputStyle(t)} value={r.startTime} onChange={(e) => setR({ ...r, startTime: e.target.value })} /></Field>
+        <Field label="End time" t={t}><input type="time" style={inputStyle(t)} value={r.endTime} onChange={(e) => setR({ ...r, endTime: e.target.value })} /></Field>
+      </div>
+      <Field label="Linked day (optional)" t={t}>
+        <select style={inputStyle(t)} value={r.dayId || ""} onChange={(e) => setR({ ...r, dayId: e.target.value })}>
+          <option value="">—</option>
+          {trip.days.map((d) => <option key={d.id} value={d.id}>Day {d.n} · {fmtShort(d.date)} · {d.overnight}</option>)}
+        </select>
+      </Field>
+      <Field label="Notes" t={t}><textarea style={{ ...inputStyle(t), minHeight: 70, resize: "vertical" }} value={r.notes} onChange={(e) => setR({ ...r, notes: e.target.value })} /></Field>
+
+      <div className="flex justify-between items-center mt-2">
+        {reservation.id ? <Btn t={t} kind="danger" small onClick={() => onDelete(reservation.id)}><Trash2 size={14} /> Delete</Btn> : <span />}
+        <div className="flex gap-2">
+          <Btn t={t} kind="ghost" onClick={onClose}>Cancel</Btn>
+          <Btn t={t} onClick={() => (r.title.trim() || r.host.trim()) && onSave(r)}><Save size={15} /> Save</Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  BUDGET                                                             */
 /* ------------------------------------------------------------------ */
 function Budget({ t, trip, updateTrip, state, canEdit }) {
@@ -1369,6 +1535,7 @@ function NewTripModal({ open, onClose, onSave, t }) {
         { id: uid(), name: "Travel", est: 0 }, { id: uid(), name: "Lodging", est: 0 },
         { id: uid(), name: "Food", est: 0 }, { id: uid(), name: "Activities", est: 0 },
       ], expenses: [] },
+      reservations: [],
     });
   };
   return (
