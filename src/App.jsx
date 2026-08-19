@@ -695,7 +695,7 @@ function DayMap({ t, stops, planPreview }) {
   if (!stops || stops.length === 0) return null;
   const bounds = stops.map((s) => [s.lat, s.lng]);
   return (
-    <div className="mt-3 rounded-2xl overflow-hidden" style={{ height: 200, border: `1px solid ${t.line}` }}>
+    <div className="rounded-2xl overflow-hidden sm:w-64 flex-shrink-0" style={{ height: 200, border: `1px solid ${t.line}` }}>
       <MapContainer bounds={bounds} boundsOptions={{ padding: [28, 28] }} scrollWheelZoom={false} style={{ height: "100%", width: "100%" }}>
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
@@ -751,36 +751,40 @@ function Itinerary({ t, trip, updateTrip, canEdit }) {
               {canEdit && <button onClick={() => setEditDay(d)} style={{ color: t.sub }}><Pencil size={16} /></button>}
             </div>
 
-            <div className="flex flex-wrap items-center gap-1.5 mt-2.5">
-              <Chip t={t} icon={<Home size={12} />} text={d.overnight} solid />
-              {d.lodging && <Chip t={t} icon={<Tent size={12} />} text={d.lodging} />}
-              {d.drive && <Chip t={t} icon={<Clock size={12} />} text={d.drive} />}
-              {(d.tags || []).map((tag) => {
-                const I = TAG_ICON[tag] || Flag;
-                return <span key={tag} className="inline-flex items-center justify-center rounded-full" style={{ width: 24, height: 24, background: t.waterSoft }}><I size={13} color={t.water} /></span>;
-              })}
-            </div>
-
-            <ul className="mt-3 space-y-1.5">
-              {d.plan.map((p, i) => (
-                <li key={i} className="flex gap-2" style={{ fontSize: 13.5, color: t.ink, lineHeight: 1.4 }}>
-                  <span style={{ color: t.primary, marginTop: 2 }}>•</span><span>{p}</span>
-                </li>
-              ))}
-            </ul>
-
-            {d.hike && (
-              <div className="mt-3 rounded-2xl px-3 py-2.5" style={{ background: t.primarySoft }}>
-                <div className="flex items-center gap-1.5">
-                  <Mountain size={14} color={t.primaryDark} />
-                  <span style={{ fontSize: 12.5, fontWeight: 700, color: t.primaryDark }}>{d.hike.name}</span>
-                  <span className="ml-auto rounded-full px-2 py-0.5" style={{ fontSize: 10.5, fontWeight: 700, background: "#fff", color: t.primaryDark }}>{d.hike.diff}</span>
+            <div className="flex flex-col sm:flex-row gap-4 mt-2.5">
+              <div className="flex-1 min-w-0">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Chip t={t} icon={<Home size={12} />} text={d.overnight} solid />
+                  {d.lodging && <Chip t={t} icon={<Tent size={12} />} text={d.lodging} />}
+                  {d.drive && <Chip t={t} icon={<Clock size={12} />} text={d.drive} />}
+                  {(d.tags || []).map((tag) => {
+                    const I = TAG_ICON[tag] || Flag;
+                    return <span key={tag} className="inline-flex items-center justify-center rounded-full" style={{ width: 24, height: 24, background: t.waterSoft }}><I size={13} color={t.water} /></span>;
+                  })}
                 </div>
-                <div style={{ fontSize: 12, color: t.primaryDark, marginTop: 4, lineHeight: 1.4, opacity: .92 }}>{d.hike.note}</div>
-              </div>
-            )}
 
-            <DayMap t={t} stops={DAY_STOPS[trip.id]?.[d.n]} planPreview={d.plan[0]} />
+                <ul className="mt-3 space-y-1.5">
+                  {d.plan.map((p, i) => (
+                    <li key={i} className="flex gap-2" style={{ fontSize: 13.5, color: t.ink, lineHeight: 1.4 }}>
+                      <span style={{ color: t.primary, marginTop: 2 }}>•</span><span>{p}</span>
+                    </li>
+                  ))}
+                </ul>
+
+                {d.hike && (
+                  <div className="mt-3 rounded-2xl px-3 py-2.5" style={{ background: t.primarySoft }}>
+                    <div className="flex items-center gap-1.5">
+                      <Mountain size={14} color={t.primaryDark} />
+                      <span style={{ fontSize: 12.5, fontWeight: 700, color: t.primaryDark }}>{d.hike.name}</span>
+                      <span className="ml-auto rounded-full px-2 py-0.5" style={{ fontSize: 10.5, fontWeight: 700, background: "#fff", color: t.primaryDark }}>{d.hike.diff}</span>
+                    </div>
+                    <div style={{ fontSize: 12, color: t.primaryDark, marginTop: 4, lineHeight: 1.4, opacity: .92 }}>{d.hike.note}</div>
+                  </div>
+                )}
+              </div>
+
+              <DayMap t={t} stops={DAY_STOPS[trip.id]?.[d.n]} planPreview={d.plan[0]} />
+            </div>
           </div>
         </Card>
       ))}
