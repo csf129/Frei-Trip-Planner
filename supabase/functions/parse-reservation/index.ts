@@ -6,8 +6,12 @@
 // the extracted reservation fields as JSON for the client to pre-fill into
 // the add/edit form (never auto-saved — the user always reviews it first).
 //
-// Requires "Verify JWT" enabled for this function (Supabase project
-// default) so only a signed-in editor can trigger a paid API call.
+// "Verify JWT" alone is NOT enough here: it only checks that the caller
+// presented *some* valid Supabase key, and the public anon/publishable key
+// (visible to anyone in the browser bundle) counts as valid. So this
+// function also explicitly resolves the caller's JWT to a real signed-in
+// user via auth.getUser() and rejects anonymous callers itself — otherwise
+// anyone could invoke this directly and run up the AI API bill.
 //
 // Deploy via the Supabase Dashboard's Edge Functions editor, or:
 //   supabase functions deploy parse-reservation
@@ -123,6 +127,12 @@ Deno.serve(async (req) => {
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
     );
+
+    const jwt = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
+    const { data: userData, error: userErr } = await admin.auth.getUser(jwt);
+    if (userErr || !userData?.user) {
+      return json({ error: "Sign in required." }, 401);
+    }
 
     const { data: file, error: dlError } = await admin.storage.from(BUCKET).download(path);
     if (dlError || !file) return json({ error: `Could not read uploaded file: ${dlError?.message || "not found"}` }, 400);
