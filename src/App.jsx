@@ -319,6 +319,7 @@ function Progress({ value, max, t, color }) {
 export default function App() {
   const [state, setState] = useState(null);
   const [view, setView] = useState("dashboard");
+  const [focusReservationId, setFocusReservationId] = useState(null);
   const [loaded, setLoaded] = useState(false);
   const [session, setSession] = useState(undefined); // undefined = still checking
   const saveTimer = useRef(null);
@@ -388,7 +389,7 @@ export default function App() {
     { id: "settings", label: "Settings", Icon: SettingsIcon },
   ];
 
-  const shared = { t, state, setState, trip, updateTrip, setSettings, setView, canEdit };
+  const shared = { t, state, setState, trip, updateTrip, setSettings, setView, canEdit, focusReservationId, setFocusReservationId };
 
   return (
     <div style={{ background: t.paper, minHeight: "100vh", color: t.ink,
@@ -725,7 +726,7 @@ function DayMap({ t, stops, planPreview }) {
 /* ------------------------------------------------------------------ */
 /*  ITINERARY                                                          */
 /* ------------------------------------------------------------------ */
-function Itinerary({ t, trip, updateTrip, canEdit }) {
+function Itinerary({ t, trip, updateTrip, canEdit, setView, setFocusReservationId }) {
   const [editDay, setEditDay] = useState(null);
   if (!trip) return null;
 
@@ -734,10 +735,17 @@ function Itinerary({ t, trip, updateTrip, canEdit }) {
     setEditDay(null);
   };
 
+  const goToReservations = (dayReservations) => {
+    if (dayReservations.length === 1) setFocusReservationId(dayReservations[0].id);
+    setView("reservations");
+  };
+
   return (
     <div className="space-y-3">
       <SectionHeader t={t} title={trip.name} sub={`${fmtLong(trip.startDate)} → ${fmtLong(trip.endDate)}`} />
-      {trip.days.map((d) => (
+      {trip.days.map((d) => {
+        const dayReservations = (trip.reservations || []).filter((r) => r.dayId === d.id);
+        return (
         <Card key={d.id} t={t}>
           <div className="px-4 pt-3.5 pb-3">
             <div className="flex items-start justify-between gap-3">
@@ -753,6 +761,14 @@ function Itinerary({ t, trip, updateTrip, canEdit }) {
               </div>
               {canEdit && <button onClick={() => setEditDay(d)} style={{ color: t.sub }}><Pencil size={16} /></button>}
             </div>
+
+            {dayReservations.length > 0 && (
+              <button onClick={() => goToReservations(dayReservations)}
+                className="inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 mt-2.5"
+                style={{ fontSize: 11.5, fontWeight: 700, background: t.primarySoft, color: t.primaryDark }}>
+                <Ticket size={12} /> {dayReservations.length === 1 ? "View reservation" : `${dayReservations.length} reservations`} →
+              </button>
+            )}
 
             <div className="flex flex-col sm:flex-row gap-4 mt-2.5">
               <div className="flex-1 min-w-0">
@@ -790,7 +806,8 @@ function Itinerary({ t, trip, updateTrip, canEdit }) {
             </div>
           </div>
         </Card>
-      ))}
+        );
+      })}
 
       <DayEditModal day={editDay} onClose={() => setEditDay(null)} onSave={saveDay} t={t} />
     </div>
@@ -947,6 +964,7 @@ function Todos({ t, trip, updateTrip, state, canEdit }) {
   const open = list.filter((x) => !x.done).sort((a, b) => (a.due || "9").localeCompare(b.due || "9"));
   const done = list.filter((x) => x.done);
   const pct = trip.todos.length ? Math.round(trip.todos.filter((x) => x.done).length / trip.todos.length * 100) : 0;
+  const reservedIds = new Set((trip.reservations || []).filter((r) => r.todoId).map((r) => r.todoId));
 
   return (
     <div className="space-y-4">
@@ -968,7 +986,7 @@ function Todos({ t, trip, updateTrip, state, canEdit }) {
       </div>
 
       <div className="space-y-2">
-        {open.map((x) => <TodoRow key={x.id} x={x} t={t} onToggle={toggle} onEdit={setEdit} canEdit={canEdit} />)}
+        {open.map((x) => <TodoRow key={x.id} x={x} t={t} onToggle={toggle} onEdit={setEdit} canEdit={canEdit} reserved={reservedIds.has(x.id)} />)}
       </div>
 
       {done.length > 0 && (
@@ -976,7 +994,7 @@ function Todos({ t, trip, updateTrip, state, canEdit }) {
           <button onClick={() => setShowDone((s) => !s)} className="flex items-center gap-1.5 py-2" style={{ color: t.sub, fontSize: 13, fontWeight: 600 }}>
             <ChevronDown size={16} style={{ transform: showDone ? "rotate(180deg)" : "none", transition: "transform .2s" }} /> Completed ({done.length})
           </button>
-          {showDone && <div className="space-y-2">{done.map((x) => <TodoRow key={x.id} x={x} t={t} onToggle={toggle} onEdit={setEdit} canEdit={canEdit} />)}</div>}
+          {showDone && <div className="space-y-2">{done.map((x) => <TodoRow key={x.id} x={x} t={t} onToggle={toggle} onEdit={setEdit} canEdit={canEdit} reserved={reservedIds.has(x.id)} />)}</div>}
         </div>
       )}
 
@@ -985,7 +1003,7 @@ function Todos({ t, trip, updateTrip, state, canEdit }) {
   );
 }
 
-function TodoRow({ x, t, onToggle, onEdit, canEdit }) {
+function TodoRow({ x, t, onToggle, onEdit, canEdit, reserved }) {
   const Icon = CAT_ICON[x.cat] || Circle;
   const overdue = x.due && !x.done && daysBetween(todayISO(), x.due) < 0;
   return (
@@ -1001,6 +1019,7 @@ function TodoRow({ x, t, onToggle, onEdit, canEdit }) {
             <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5" style={{ fontSize: 10.5, fontWeight: 600, background: t.primarySoft, color: t.primaryDark }}><Icon size={11} /> {x.cat}</span>
             {x.due && <span style={{ fontSize: 11, fontWeight: 600, color: overdue ? t.danger : t.sub }}>{overdue ? "⚠ " : ""}{fmtShort(x.due)}</span>}
             <span className="rounded-full px-2 py-0.5" style={{ fontSize: 10, fontWeight: 700, background: "#fff", color: PRI[x.pri].c, border: `1px solid ${PRI[x.pri].c}` }}>{PRI[x.pri].label}</span>
+            {reserved && <span className="inline-flex items-center gap-1" style={{ fontSize: 10.5, fontWeight: 700, color: t.primaryDark }}><Ticket size={11} /> Booked</span>}
           </div>
         </div>
         {canEdit && <button onClick={() => onEdit(x)} style={{ color: t.sub }}><Pencil size={15} /></button>}
@@ -1047,15 +1066,25 @@ function TodoEditModal({ todo, onClose, onSave, onDelete, t }) {
 /* ------------------------------------------------------------------ */
 const RESERVATION_TYPES = ["Hotel", "Ferry", "Tour", "Flight", "Car Rental", "Other"];
 const RES_TYPE_ICON = { Hotel: Home, Ferry: Ship, Tour: Camera, Flight: Plane, "Car Rental": Car, Other: FileText };
+const BOOKABLE_CATEGORIES = ["Ferries", "Lodging", "Tours"];
+const CAT_TO_RES_TYPE = { Ferries: "Ferry", Lodging: "Hotel", Tours: "Tour" };
 const blankReservation = () => ({
   type: "Hotel", title: "", host: "", location: "", confirmationNumber: "",
-  startDate: "", endDate: "", startTime: "", endTime: "", dayId: "", notes: "", filePath: null,
+  startDate: "", endDate: "", startTime: "", endTime: "", dayId: "", todoId: "", notes: "", filePath: null,
 });
 
-function Reservations({ t, trip, updateTrip, canEdit }) {
+function Reservations({ t, trip, updateTrip, canEdit, focusReservationId, setFocusReservationId }) {
   const [edit, setEdit] = useState(null);
+  const list = trip?.reservations || [];
+
+  useEffect(() => {
+    if (!focusReservationId) return;
+    const found = list.find((r) => r.id === focusReservationId);
+    if (found) setEdit(found);
+    setFocusReservationId(null);
+  }, [focusReservationId]);
+
   if (!trip) return null;
-  const list = trip.reservations || [];
 
   const save = (r) => {
     if (r.id) updateTrip({ reservations: list.map((x) => x.id === r.id ? r : x) });
@@ -1065,35 +1094,85 @@ function Reservations({ t, trip, updateTrip, canEdit }) {
   const del = (id) => { updateTrip({ reservations: list.filter((x) => x.id !== id) }); setEdit(null); };
 
   const sorted = [...list].sort((a, b) => (a.startDate || "9").localeCompare(b.startDate || "9"));
+  const bookable = trip.todos.filter((x) => BOOKABLE_CATEGORIES.includes(x.cat));
+  const openCount = bookable.filter((x) => !list.some((r) => r.todoId === x.id)).length;
+
+  const addForTodo = (x) => setEdit({ ...blankReservation(), type: CAT_TO_RES_TYPE[x.cat] || "Other", title: x.title, todoId: x.id });
 
   return (
     <div className="space-y-4">
       <SectionHeader t={t} title="Reservations" sub={`${list.length} tracked`}
         action={canEdit && <Btn t={t} small onClick={() => setEdit(blankReservation())}><Plus size={15} /> Add</Btn>} />
 
-      {sorted.length === 0 ? (
-        <Card t={t} style={{ padding: 30, textAlign: "center" }}>
-          <Ticket size={30} color={t.line} className="mx-auto mb-2" />
-          <div style={{ fontSize: 13, color: t.sub, lineHeight: 1.4 }}>
-            No reservations tracked yet.{canEdit ? " Add hotels, ferries, tours — anything that needs a confirmation number." : ""}
+      {bookable.length > 0 && (
+        <div>
+          <div style={{ fontSize: 12.5, fontWeight: 700, color: t.sub, marginBottom: 6 }}>
+            Needs a booking {openCount > 0 ? `(${openCount} open)` : "— all set"}
           </div>
-        </Card>
-      ) : (
-        <div className="space-y-2">
-          {sorted.map((r) => (
-            <ReservationRow key={r.id} r={r} t={t} trip={trip} onEdit={canEdit ? () => setEdit(r) : undefined} />
-          ))}
+          <div className="space-y-2">
+            {bookable.map((x) => (
+              <BookingRow key={x.id} x={x} t={t} canEdit={canEdit} reservations={list} onAdd={() => addForTodo(x)} onEditReservation={setEdit} />
+            ))}
+          </div>
         </div>
       )}
+
+      <div>
+        {bookable.length > 0 && <div style={{ fontSize: 12.5, fontWeight: 700, color: t.sub, marginBottom: 6 }}>All reservations</div>}
+        {sorted.length === 0 ? (
+          <Card t={t} style={{ padding: 30, textAlign: "center" }}>
+            <Ticket size={30} color={t.line} className="mx-auto mb-2" />
+            <div style={{ fontSize: 13, color: t.sub, lineHeight: 1.4 }}>
+              No reservations tracked yet.{canEdit ? " Add hotels, ferries, tours — anything that needs a confirmation number." : ""}
+            </div>
+          </Card>
+        ) : (
+          <div className="space-y-2">
+            {sorted.map((r) => (
+              <ReservationRow key={r.id} r={r} t={t} trip={trip} onEdit={canEdit ? () => setEdit(r) : undefined} />
+            ))}
+          </div>
+        )}
+      </div>
 
       <ReservationEditModal reservation={edit} onClose={() => setEdit(null)} onSave={save} onDelete={del} t={t} trip={trip} />
     </div>
   );
 }
 
+function BookingRow({ x, t, canEdit, reservations, onAdd, onEditReservation }) {
+  const Icon = CAT_ICON[x.cat] || Circle;
+  const linked = reservations.filter((r) => r.todoId === x.id);
+  const booked = linked.length > 0;
+  return (
+    <Card t={t} style={{ padding: 0 }}>
+      <div className="flex items-center gap-3 px-3.5 py-3">
+        <div className="flex items-center justify-center rounded-lg flex-shrink-0" style={{ width: 34, height: 34, background: booked ? t.primarySoft : t.accentSoft }}>
+          <Icon size={16} color={booked ? t.primaryDark : t.accent} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="truncate" style={{ fontSize: 13.5, fontWeight: 600, color: t.ink }}>{x.title}</div>
+          <div style={{ fontSize: 11, color: t.sub, marginTop: 1 }}>{x.cat}{x.due ? ` · due ${fmtShort(x.due)}` : ""}</div>
+        </div>
+        {booked ? (
+          <button onClick={() => onEditReservation(linked[0])} className="flex items-center gap-1 rounded-full px-2.5 py-1 flex-shrink-0"
+            style={{ fontSize: 11.5, fontWeight: 700, color: t.primaryDark, background: t.primarySoft }}>
+            <CheckCircle2 size={13} /> {linked.length > 1 ? `${linked.length} booked` : "Booked"}
+          </button>
+        ) : canEdit ? (
+          <Btn t={t} small kind="soft" onClick={onAdd} style={{ flexShrink: 0 }}><Plus size={13} /> Add</Btn>
+        ) : (
+          <span style={{ fontSize: 11, color: t.sub, flexShrink: 0 }}>Not booked</span>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 function ReservationRow({ r, t, trip, onEdit }) {
   const Icon = RES_TYPE_ICON[r.type] || FileText;
   const day = trip.days.find((d) => d.id === r.dayId);
+  const todo = trip.todos.find((x) => x.id === r.todoId);
   return (
     <Card t={t} style={{ padding: 0 }} onClick={onEdit}>
       <div className="flex items-start gap-3 px-3.5 py-3" style={{ cursor: onEdit ? "pointer" : "default" }}>
@@ -1116,6 +1195,7 @@ function ReservationRow({ r, t, trip, onEdit }) {
             )}
             {r.confirmationNumber && <span style={{ fontSize: 11, color: t.sub }}>Conf# {r.confirmationNumber}</span>}
             {day && <span style={{ fontSize: 11, color: t.primary, fontWeight: 600 }}>Day {day.n}</span>}
+            {todo && <span className="inline-flex items-center gap-1" style={{ fontSize: 11, color: t.sub }}><ListChecks size={11} /> {todo.title}</span>}
           </div>
         </div>
         {onEdit && <Pencil size={15} color={t.sub} style={{ flexShrink: 0 }} />}
@@ -1200,12 +1280,20 @@ function ReservationEditModal({ reservation, onClose, onSave, onDelete, t, trip 
         <Field label="Start time" t={t}><input type="time" style={inputStyle(t)} value={r.startTime} onChange={(e) => setR({ ...r, startTime: e.target.value })} /></Field>
         <Field label="End time" t={t}><input type="time" style={inputStyle(t)} value={r.endTime} onChange={(e) => setR({ ...r, endTime: e.target.value })} /></Field>
       </div>
-      <Field label="Linked day (optional)" t={t}>
-        <select style={inputStyle(t)} value={r.dayId || ""} onChange={(e) => setR({ ...r, dayId: e.target.value })}>
-          <option value="">—</option>
-          {trip.days.map((d) => <option key={d.id} value={d.id}>Day {d.n} · {fmtShort(d.date)} · {d.overnight}</option>)}
-        </select>
-      </Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Linked day (optional)" t={t}>
+          <select style={inputStyle(t)} value={r.dayId || ""} onChange={(e) => setR({ ...r, dayId: e.target.value })}>
+            <option value="">—</option>
+            {trip.days.map((d) => <option key={d.id} value={d.id}>Day {d.n} · {fmtShort(d.date)} · {d.overnight}</option>)}
+          </select>
+        </Field>
+        <Field label="Linked checklist item (optional)" t={t}>
+          <select style={inputStyle(t)} value={r.todoId || ""} onChange={(e) => setR({ ...r, todoId: e.target.value })}>
+            <option value="">—</option>
+            {trip.todos.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}
+          </select>
+        </Field>
+      </div>
       <Field label="Notes" t={t}><textarea style={{ ...inputStyle(t), minHeight: 70, resize: "vertical" }} value={r.notes} onChange={(e) => setR({ ...r, notes: e.target.value })} /></Field>
 
       <div className="flex justify-between items-center mt-2">
