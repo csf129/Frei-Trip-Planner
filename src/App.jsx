@@ -1129,7 +1129,6 @@ function ReservationEditModal({ reservation, onClose, onSave, onDelete, t, trip 
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   useEffect(() => { setR(reservation); setStatus(""); }, [reservation]);
-  if (!reservation || !r) return null;
 
   const handleFile = async (file) => {
     if (!file) return;
@@ -1156,6 +1155,20 @@ function ReservationEditModal({ reservation, onClose, onSave, onDelete, t, trip 
     }
   };
 
+  useEffect(() => {
+    if (!reservation) return;
+    const onPaste = (e) => {
+      const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith("image/"));
+      if (!item) return;
+      e.preventDefault();
+      handleFile(item.getAsFile());
+    };
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  });
+
+  if (!reservation || !r) return null;
+
   return (
     <Modal open={!!reservation} onClose={onClose} title={reservation.id ? "Edit reservation" : "New reservation"} t={t} wide>
       <div className="rounded-2xl px-3 py-3 mb-3" style={{ background: t.paper2, border: `1px dashed ${t.line}` }}>
@@ -1164,6 +1177,7 @@ function ReservationEditModal({ reservation, onClose, onSave, onDelete, t, trip 
           {busy ? "Working…" : "Upload a screenshot or file — AI fills in the fields"}
           <input type="file" accept="image/*,.pdf" className="hidden" disabled={busy} onChange={(e) => handleFile(e.target.files?.[0])} />
         </label>
+        {!busy && <div style={{ fontSize: 11, color: t.sub, marginTop: 4, textAlign: "center" }}>or just paste (Ctrl+V / ⌘V) a copied screenshot anywhere in this form</div>}
         {status && <div style={{ fontSize: 11.5, color: t.sub, marginTop: 6, textAlign: "center" }}>{status}</div>}
       </div>
 
