@@ -9,7 +9,15 @@ import {
   Save, ListChecks, LayoutDashboard, ChevronDown,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RTooltip } from "recharts";
+import { MapContainer, TileLayer, Marker, Tooltip as LeafletTooltip, Polyline } from "react-leaflet";
+import L from "leaflet";
+import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
+import markerIcon from "leaflet/dist/images/marker-icon.png";
+import markerShadow from "leaflet/dist/images/marker-shadow.png";
 import { supabase } from "./lib/supabaseClient";
+
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({ iconRetinaUrl: markerIcon2x, iconUrl: markerIcon, shadowUrl: markerShadow });
 
 /* ------------------------------------------------------------------ */
 /*  THEME                                                              */
@@ -659,6 +667,59 @@ function ReminderRow({ x, t, today, overdue }) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  DAY STOPS — approximate coordinates for the map, keyed by trip id  */
+/*  then day number. Not part of the shared/editable data model; if a  */
+/*  day isn't listed here, its card just shows no map.                */
+/* ------------------------------------------------------------------ */
+const DAY_STOPS = {
+  "ns-nl-2027": {
+    1: [{ name: "Plainville, MA", lat: 42.0084, lng: -71.3373 }, { name: "Bar Harbor, ME", lat: 44.3876, lng: -68.2039 }, { name: "Yarmouth, NS", lat: 43.8374, lng: -66.1174 }],
+    2: [{ name: "Yarmouth, NS", lat: 43.8374, lng: -66.1174 }, { name: "Lunenburg, NS", lat: 44.3776, lng: -64.3103 }, { name: "Peggy's Cove, NS", lat: 44.4926, lng: -63.9188 }],
+    3: [{ name: "Peggy's Cove, NS", lat: 44.4926, lng: -63.9188 }, { name: "Baddeck, NS", lat: 46.1004, lng: -60.7530 }],
+    4: [{ name: "Baddeck, NS", lat: 46.1004, lng: -60.7530 }, { name: "Middle Head / Ingonish, NS", lat: 46.6580, lng: -60.3796 }],
+    5: [{ name: "Baddeck, NS", lat: 46.1004, lng: -60.7530 }, { name: "Uisge Bàn Falls trailhead", lat: 46.0201, lng: -60.6270 }],
+    6: [{ name: "Baddeck, NS", lat: 46.1004, lng: -60.7530 }, { name: "North Sydney, NS", lat: 46.2151, lng: -60.2564 }, { name: "Argentia, NL", lat: 47.2989, lng: -53.9909 }],
+    7: [{ name: "Argentia, NL", lat: 47.2989, lng: -53.9909 }, { name: "Twillingate, NL", lat: 49.6425, lng: -54.7458 }],
+    8: [{ name: "Twillingate, NL", lat: 49.6425, lng: -54.7458 }, { name: "Long Point Lighthouse", lat: 49.6772, lng: -54.7756 }],
+    9: [{ name: "Twillingate, NL", lat: 49.6425, lng: -54.7458 }, { name: "Lower Little Harbour, NL", lat: 49.6198, lng: -54.7524 }],
+    10: [{ name: "Twillingate, NL", lat: 49.6425, lng: -54.7458 }, { name: "Rocky Harbour, NL (Gros Morne)", lat: 49.5892, lng: -57.8763 }],
+    11: [{ name: "Rocky Harbour, NL", lat: 49.5892, lng: -57.8763 }, { name: "Western Brook Pond trailhead", lat: 49.7648, lng: -57.8933 }],
+    12: [{ name: "Rocky Harbour, NL", lat: 49.5892, lng: -57.8763 }, { name: "Tablelands Trail", lat: 49.4931, lng: -57.9522 }],
+    13: [{ name: "Rocky Harbour, NL", lat: 49.5892, lng: -57.8763 }, { name: "Port aux Basques, NL", lat: 47.5711, lng: -59.1400 }, { name: "North Sydney, NS", lat: 46.2151, lng: -60.2564 }],
+    14: [{ name: "North Sydney, NS", lat: 46.2151, lng: -60.2564 }, { name: "Burntcoat Head, NS", lat: 45.3106, lng: -63.7994 }],
+    15: [{ name: "Burntcoat Head, NS", lat: 45.3106, lng: -63.7994 }, { name: "Plainville, MA", lat: 42.0084, lng: -71.3373 }],
+  },
+};
+
+function DayMap({ t, stops, planPreview }) {
+  if (!stops || stops.length === 0) return null;
+  const bounds = stops.map((s) => [s.lat, s.lng]);
+  return (
+    <div className="mt-3 rounded-2xl overflow-hidden" style={{ height: 200, border: `1px solid ${t.line}` }}>
+      <MapContainer bounds={bounds} boundsOptions={{ padding: [28, 28] }} scrollWheelZoom={false} style={{ height: "100%", width: "100%" }}>
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+        <Polyline positions={bounds} pathOptions={{ color: t.primary, weight: 3, dashArray: "6 8" }} />
+        {stops.map((s, i) => (
+          <Marker key={i} position={[s.lat, s.lng]}
+            eventHandlers={{ click: () => window.open(`https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`, "_blank", "noopener") }}>
+            <LeafletTooltip direction="top" offset={[0, -30]}>
+              <div style={{ maxWidth: 200 }}>
+                <div style={{ fontWeight: 700 }}>{s.name}</div>
+                {planPreview && <div style={{ fontSize: 11, marginTop: 2 }}>{planPreview}</div>}
+                <div style={{ fontSize: 10.5, marginTop: 3, opacity: .75 }}>Click for Google Maps →</div>
+              </div>
+            </LeafletTooltip>
+          </Marker>
+        ))}
+      </MapContainer>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  ITINERARY                                                          */
 /* ------------------------------------------------------------------ */
 function Itinerary({ t, trip, updateTrip, canEdit }) {
@@ -718,6 +779,8 @@ function Itinerary({ t, trip, updateTrip, canEdit }) {
                 <div style={{ fontSize: 12, color: t.primaryDark, marginTop: 4, lineHeight: 1.4, opacity: .92 }}>{d.hike.note}</div>
               </div>
             )}
+
+            <DayMap t={t} stops={DAY_STOPS[trip.id]?.[d.n]} planPreview={d.plan[0]} />
           </div>
         </Card>
       ))}
