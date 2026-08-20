@@ -1872,6 +1872,11 @@ function AssistantPanel({ t, trip, updateTrip }) {
         history = [...history, { role: "assistant", content: data.content }];
         setMessages(history);
 
+        if (data.stop_reason === "max_tokens") {
+          setErrorMsg("That response got cut off — it was too much for one reply. Try asking for a smaller piece at a time (e.g. a few days instead of the whole trip).");
+          break;
+        }
+
         const toolUses = data.content.filter((b) => b.type === "tool_use");
         if (toolUses.length === 0) break;
 
@@ -1929,8 +1934,22 @@ function AssistantPanel({ t, trip, updateTrip }) {
           {messages.map((m, i) => {
             const textBlocks = (m.content || []).filter((b) => b.type === "text" || b.type === "image");
             const toolBlocks = (m.content || []).filter((b) => b.type === "tool_use");
-            if (textBlocks.length === 0 && toolBlocks.length === 0) return null;
             const isUser = m.role === "user";
+            // Our own synthetic tool_result messages (always role "user")
+            // are protocol plumbing, not something to show.
+            if (isUser && textBlocks.length === 0 && toolBlocks.length === 0) return null;
+            // An assistant turn should never render as nothing -- if the
+            // model only produced a thinking block or otherwise no
+            // visible content, say so instead of looking frozen.
+            if (!isUser && textBlocks.length === 0 && toolBlocks.length === 0) {
+              return (
+                <div key={i} className="flex justify-start">
+                  <div className="rounded-2xl px-3.5 py-2.5" style={{ background: t.card, border: `1px solid ${t.line}`, fontSize: 13, color: t.sub, fontStyle: "italic" }}>
+                    (No reply — try rephrasing or asking for a smaller change.)
+                  </div>
+                </div>
+              );
+            }
             return (
               <div key={i} className={isUser ? "flex justify-end" : "flex justify-start"}>
                 <div style={{ maxWidth: "85%" }} className="space-y-2">

@@ -208,9 +208,13 @@ Deno.serve(async (req) => {
         "content-type": "application/json",
       },
       body: JSON.stringify({
+        // 2048 was too tight for anything that touches several days at
+        // once (e.g. "reshuffle the itinerary around this new ferry
+        // schedule") -- Claude would run out of room mid-response with
+        // nothing usable to show. effort left at the default ("high") for
+        // better reasoning quality on multi-day restructuring asks.
         model: "claude-sonnet-5",
-        max_tokens: 2048,
-        output_config: { effort: "medium" },
+        max_tokens: 8192,
         system: systemPrompt(trip),
         tools: TOOLS,
         messages,
