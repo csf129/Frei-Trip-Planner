@@ -176,6 +176,78 @@ Current trip data (JSON):
 ${JSON.stringify(trip)}`;
 }
 
+// Anthropic caps how long a *non-streaming* request may run before it
+// rejects it outright -- large multi-day itinerary rewrites (lots of
+// tool-call output, plus adaptive-thinking tokens, all counted against
+// max_tokens) can need more room than that allows. Streaming removes that
+// ceiling, so this reads the SSE stream and reassembles it into the same
+// {content, stop_reason} shape the client already expects -- no client
+// changes needed, this is purely an internal fetch-vs-fetch swap.
+async function streamAnthropicMessage(anthropicKey: string, body: Record<string, unknown>) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": anthropicKey,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ ...body, stream: true }),
+  });
+  if (!res.ok || !res.body) {
+    throw new Error(`Anthropic API error (${res.status}): ${await res.text()}`);
+  }
+
+  const contentBlocks: any[] = [];
+  const jsonBuffers: Record<number, string> = {};
+  let stopReason: string | null = null;
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split("\n\n");
+    buffer = events.pop() || "";
+    for (const evt of events) {
+      const dataLine = evt.split("\n").find((l) => l.startsWith("data: "));
+      if (!dataLine) continue;
+      const payload = JSON.parse(dataLine.slice(6));
+
+      if (payload.type === "content_block_start") {
+        contentBlocks[payload.index] = { ...payload.content_block };
+        if (payload.content_block.type === "tool_use") jsonBuffers[payload.index] = "";
+      } else if (payload.type === "content_block_delta") {
+        const idx = payload.index;
+        if (payload.delta.type === "text_delta") {
+          contentBlocks[idx].text = (contentBlocks[idx].text || "") + payload.delta.text;
+        } else if (payload.delta.type === "input_json_delta") {
+          jsonBuffers[idx] = (jsonBuffers[idx] || "") + payload.delta.partial_json;
+        } else if (payload.delta.type === "thinking_delta") {
+          contentBlocks[idx].thinking = (contentBlocks[idx].thinking || "") + payload.delta.thinking;
+        } else if (payload.delta.type === "signature_delta") {
+          // Thinking blocks must be echoed back with their signature intact
+          // on later turns (same-model continuation) or the API rejects
+          // the request -- capture it here so history stays valid.
+          contentBlocks[idx].signature = (contentBlocks[idx].signature || "") + payload.delta.signature;
+        }
+      } else if (payload.type === "content_block_stop") {
+        const idx = payload.index;
+        if (contentBlocks[idx]?.type === "tool_use") {
+          try { contentBlocks[idx].input = JSON.parse(jsonBuffers[idx] || "{}"); }
+          catch { contentBlocks[idx].input = {}; }
+        }
+      } else if (payload.type === "message_delta") {
+        stopReason = payload.delta?.stop_reason ?? stopReason;
+      }
+    }
+  }
+
+  return { content: contentBlocks.filter(Boolean), stop_reason: stopReason };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS_HEADERS });
 
@@ -200,33 +272,22 @@ Deno.serve(async (req) => {
       return json({ error: "The trip assistant needs an ANTHROPIC_API_KEY function secret." }, 500);
     }
 
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": anthropicKey,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        // 2048 was too tight for anything that touches several days at
-        // once (e.g. "reshuffle the itinerary around this new ferry
-        // schedule") -- Claude would run out of room mid-response with
-        // nothing usable to show. effort left at the default ("high") for
-        // better reasoning quality on multi-day restructuring asks.
-        model: "claude-sonnet-5",
-        max_tokens: 8192,
-        system: systemPrompt(trip),
-        tools: TOOLS,
-        messages,
-      }),
+    // Large multi-day restructuring asks (e.g. "reshuffle the itinerary
+    // around this new ferry schedule") can need a lot of room -- both for
+    // the tool-call output itself and for adaptive-thinking tokens, which
+    // count against the same max_tokens budget. Streaming (above) lifts
+    // the request-duration ceiling that made anything past ~8K risky
+    // without it; effort stays at the default ("high") for better
+    // reasoning quality on these asks.
+    const data = await streamAnthropicMessage(anthropicKey, {
+      model: "claude-sonnet-5",
+      max_tokens: 32000,
+      system: systemPrompt(trip),
+      tools: TOOLS,
+      messages,
     });
 
-    if (!res.ok) {
-      return json({ error: `Anthropic API error (${res.status}): ${await res.text()}` }, 502);
-    }
-
-    const data = await res.json();
-    return json({ content: data.content, stop_reason: data.stop_reason }, 200);
+    return json(data, 200);
   } catch (e) {
     return json({ error: String((e as Error)?.message || e) }, 500);
   }

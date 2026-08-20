@@ -1808,6 +1808,7 @@ function AssistantPanel({ t, trip, updateTrip }) {
   const [attachedImage, setAttachedImage] = useState(null);
   const [busy, setBusy] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
+  const [continuableHistory, setContinuableHistory] = useState(null);
   const scrollRef = useRef(null);
 
   useEffect(() => {
@@ -1851,19 +1852,11 @@ function AssistantPanel({ t, trip, updateTrip }) {
     return data;
   };
 
-  const sendMessage = async () => {
-    if (!input.trim() && !attachedImage) return;
+  const runLoop = async (startHistory) => {
+    let history = startHistory;
     setBusy(true);
     setErrorMsg("");
-    const userContent = [];
-    if (attachedImage) userContent.push({ type: "image", source: { type: "base64", media_type: attachedImage.mediaType, data: attachedImage.base64 } });
-    userContent.push({ type: "text", text: input.trim() || "Here's a screenshot." });
-
-    let history = [...messages, { role: "user", content: userContent }];
-    setMessages(history);
-    setInput("");
-    setAttachedImage(null);
-
+    setContinuableHistory(null);
     try {
       let rounds = 0;
       while (rounds < 3) {
@@ -1873,7 +1866,8 @@ function AssistantPanel({ t, trip, updateTrip }) {
         setMessages(history);
 
         if (data.stop_reason === "max_tokens") {
-          setErrorMsg("That response got cut off — it was too much for one reply. Try asking for a smaller piece at a time (e.g. a few days instead of the whole trip).");
+          setErrorMsg("That response got cut off — it ran out of room. Hit Continue to let it pick up where it left off.");
+          setContinuableHistory(history);
           break;
         }
 
@@ -1900,6 +1894,26 @@ function AssistantPanel({ t, trip, updateTrip }) {
     } finally {
       setBusy(false);
     }
+  };
+
+  const sendMessage = async () => {
+    if (!input.trim() && !attachedImage) return;
+    const userContent = [];
+    if (attachedImage) userContent.push({ type: "image", source: { type: "base64", media_type: attachedImage.mediaType, data: attachedImage.base64 } });
+    userContent.push({ type: "text", text: input.trim() || "Here's a screenshot." });
+
+    const history = [...messages, { role: "user", content: userContent }];
+    setMessages(history);
+    setInput("");
+    setAttachedImage(null);
+    await runLoop(history);
+  };
+
+  const continueGeneration = async () => {
+    if (!continuableHistory) return;
+    const history = [...continuableHistory, { role: "user", content: [{ type: "text", text: "Please continue where you left off." }] }];
+    setMessages(history);
+    await runLoop(history);
   };
 
   const approve = (id) => {
@@ -1973,6 +1987,9 @@ function AssistantPanel({ t, trip, updateTrip }) {
           })}
           {busy && <div style={{ fontSize: 12.5, color: t.sub, fontStyle: "italic" }}>Thinking…</div>}
           {errorMsg && <div style={{ fontSize: 12.5, color: t.danger }}>{errorMsg}</div>}
+          {continuableHistory && !busy && (
+            <Btn t={t} small onClick={continueGeneration}>Continue</Btn>
+          )}
         </div>
 
         <div className="px-4 py-3" style={{ borderTop: `1px solid ${t.line}`, background: t.paper }}>
