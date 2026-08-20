@@ -7,6 +7,7 @@ import {
   ChevronLeft, ChevronRight, Circle, CheckCircle2, PiggyBank,
   DollarSign, Clock, Luggage, Camera, Flag, Info, Heart,
   Save, ListChecks, LayoutDashboard, ChevronDown, Ticket, Upload, Loader2, Plane,
+  Sparkles, Send, Check, ImagePlus,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RTooltip } from "recharts";
 import { MapContainer, TileLayer, Marker, Tooltip as LeafletTooltip, Polyline } from "react-leaflet";
@@ -444,6 +445,8 @@ export default function App() {
           })}
         </div>
       </nav>
+
+      {canEdit && <AssistantPanel t={t} trip={trip} updateTrip={updateTrip} />}
     </div>
   );
 }
@@ -1698,6 +1701,284 @@ function NewTripModal({ open, onClose, onSave, t }) {
       <div style={{ fontSize: 12, color: t.sub, lineHeight: 1.4, marginBottom: 10 }}>Starts empty — add days, checklist items and a budget once it's created.</div>
       <div className="flex justify-end gap-2"><Btn t={t} kind="ghost" onClick={onClose}>Cancel</Btn><Btn t={t} onClick={create}><Plus size={15} /> Create trip</Btn></div>
     </Modal>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  AI TRIP ASSISTANT                                                  */
+/*  Proposes changes via tool calls; nothing here writes to Supabase   */
+/*  directly -- approved changes route through the same updateTrip()   */
+/*  shapes the regular Add/Edit modals already use.                    */
+/* ------------------------------------------------------------------ */
+const TOOL_SUMMARY = {
+  update_day: (input, trip) => {
+    const day = trip.days.find((d) => d.id === input.dayId);
+    const fields = Object.keys(input).filter((k) => k !== "dayId");
+    return `Update Day ${day ? day.n : "?"} (${fields.join(", ") || "no fields"})`;
+  },
+  add_todo: (input) => `Add checklist item: "${input.title}"`,
+  update_todo: (input, trip) => {
+    const todo = trip.todos.find((x) => x.id === input.todoId);
+    if (input.done === true) return `Mark "${todo?.title || "?"}" as done`;
+    if (input.done === false) return `Mark "${todo?.title || "?"}" as not done`;
+    return `Update checklist item: "${todo?.title || "?"}"`;
+  },
+  delete_todo: (input, trip) => {
+    const todo = trip.todos.find((x) => x.id === input.todoId);
+    return `Remove checklist item: "${todo?.title || "?"}"`;
+  },
+  add_reservation: (input) => `Add reservation: ${input.title} (${input.type})`,
+  update_reservation: (input, trip) => {
+    const r = (trip.reservations || []).find((x) => x.id === input.reservationId);
+    return `Update reservation: "${r?.title || "?"}"`;
+  },
+  add_expense: (input) => `Log expense: ${input.label} — ${money(input.amount)}`,
+  update_budget_category: (input, trip) => {
+    const cat = trip.budget.categories.find((c) => c.id === input.categoryId);
+    return `Set ${cat?.name || "?"} budget to ${money(input.est)}`;
+  },
+};
+
+const TOOL_APPLY = {
+  update_day: (input, trip, updateTrip) => {
+    const { dayId, ...patch } = input;
+    updateTrip({ days: trip.days.map((d) => d.id === dayId ? { ...d, ...patch } : d) });
+  },
+  add_todo: (input, trip, updateTrip) => {
+    updateTrip({ todos: [...trip.todos, { done: false, due: "", notes: "", pri: "medium", ...input, id: uid() }] });
+  },
+  update_todo: (input, trip, updateTrip) => {
+    const { todoId, ...patch } = input;
+    updateTrip({ todos: trip.todos.map((x) => x.id === todoId ? { ...x, ...patch } : x) });
+  },
+  delete_todo: (input, trip, updateTrip) => {
+    updateTrip({ todos: trip.todos.filter((x) => x.id !== input.todoId) });
+  },
+  add_reservation: (input, trip, updateTrip) => {
+    updateTrip({ reservations: [...(trip.reservations || []), { ...blankReservation(), ...input, id: uid() }] });
+  },
+  update_reservation: (input, trip, updateTrip) => {
+    const { reservationId, ...patch } = input;
+    updateTrip({ reservations: (trip.reservations || []).map((r) => r.id === reservationId ? { ...r, ...patch } : r) });
+  },
+  add_expense: (input, trip, updateTrip) => {
+    updateTrip({ budget: { ...trip.budget, expenses: [{ ...input, id: uid() }, ...trip.budget.expenses] } });
+  },
+  update_budget_category: (input, trip, updateTrip) => {
+    updateTrip({ budget: { ...trip.budget, categories: trip.budget.categories.map((c) => c.id === input.categoryId ? { ...c, est: input.est } : c) } });
+  },
+};
+
+function AssistantButton({ t, onClick }) {
+  return (
+    <button onClick={onClick} className="fixed z-40 flex items-center justify-center rounded-full"
+      style={{ right: 16, bottom: 76, width: 52, height: 52, background: t.primary, boxShadow: "0 6px 20px rgba(50,45,30,.3)" }}>
+      <Sparkles size={22} color="#fff" />
+    </button>
+  );
+}
+
+function ChangeCard({ t, toolName, input, trip, status, onApprove, onReject }) {
+  const summarize = TOOL_SUMMARY[toolName];
+  const summary = summarize ? summarize(input, trip) : toolName;
+  return (
+    <div className="rounded-2xl px-3 py-2.5" style={{ background: t.accentSoft, border: `1px solid ${t.accent}` }}>
+      <div className="flex items-center gap-1.5 mb-1">
+        <Sparkles size={13} color={t.accent} />
+        <span style={{ fontSize: 11, fontWeight: 700, color: "#7a5c1e" }}>Proposed change</span>
+      </div>
+      <div style={{ fontSize: 13, color: t.ink, lineHeight: 1.35 }}>{summary}</div>
+      {status === "pending" && (
+        <div className="flex gap-2 mt-2">
+          <Btn t={t} small kind="ghost" onClick={onReject}>Reject</Btn>
+          <Btn t={t} small onClick={onApprove}><Check size={13} /> Approve</Btn>
+        </div>
+      )}
+      {status === "approved" && <div style={{ fontSize: 11.5, fontWeight: 700, color: t.primaryDark, marginTop: 6 }}>✓ Approved &amp; saved</div>}
+      {status === "rejected" && <div style={{ fontSize: 11.5, fontWeight: 700, color: t.sub, marginTop: 6 }}>Rejected</div>}
+    </div>
+  );
+}
+
+function AssistantPanel({ t, trip, updateTrip }) {
+  const [open, setOpen] = useState(false);
+  const [messages, setMessages] = useState([]);
+  const [pending, setPending] = useState({});
+  const [input, setInput] = useState("");
+  const [attachedImage, setAttachedImage] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+  const scrollRef = useRef(null);
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages, pending, open]);
+
+  const handleImageFile = (file) => {
+    if (!file || !file.type.startsWith("image/")) return;
+    if (file.size > 8 * 1024 * 1024) { setErrorMsg("That image is too large (max 8MB)."); return; }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = String(reader.result).split(",")[1];
+      setAttachedImage({ base64, mediaType: file.type, name: file.name });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const onPaste = (e) => {
+      const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith("image/"));
+      if (!item) return;
+      e.preventDefault();
+      handleImageFile(item.getAsFile());
+    };
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  });
+
+  const runTurn = async (history) => {
+    const { data, error } = await supabase.functions.invoke("trip-assistant", { body: { messages: history, trip } });
+    if (error) {
+      let detail = error.message;
+      try {
+        const body = await error.context?.json();
+        if (body?.error) detail = body.error;
+      } catch { /* not JSON */ }
+      throw new Error(detail);
+    }
+    if (data?.error) throw new Error(data.error);
+    return data;
+  };
+
+  const sendMessage = async () => {
+    if (!input.trim() && !attachedImage) return;
+    setBusy(true);
+    setErrorMsg("");
+    const userContent = [];
+    if (attachedImage) userContent.push({ type: "image", source: { type: "base64", media_type: attachedImage.mediaType, data: attachedImage.base64 } });
+    userContent.push({ type: "text", text: input.trim() || "Here's a screenshot." });
+
+    let history = [...messages, { role: "user", content: userContent }];
+    setMessages(history);
+    setInput("");
+    setAttachedImage(null);
+
+    try {
+      let rounds = 0;
+      while (rounds < 3) {
+        rounds++;
+        const data = await runTurn(history);
+        history = [...history, { role: "assistant", content: data.content }];
+        setMessages(history);
+
+        const toolUses = data.content.filter((b) => b.type === "tool_use");
+        if (toolUses.length === 0) break;
+
+        setPending((p) => {
+          const next = { ...p };
+          toolUses.forEach((tu) => { next[tu.id] = { status: "pending", toolName: tu.name, input: tu.input }; });
+          return next;
+        });
+
+        const toolResults = toolUses.map((tu) => ({
+          type: "tool_result", tool_use_id: tu.id,
+          content: JSON.stringify({ status: "queued for user review" }),
+        }));
+        history = [...history, { role: "user", content: toolResults }];
+        setMessages(history);
+
+        if (data.stop_reason !== "tool_use") break;
+      }
+    } catch (e) {
+      setErrorMsg(e.message || String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const approve = (id) => {
+    const change = pending[id];
+    if (!change) return;
+    const apply = TOOL_APPLY[change.toolName];
+    if (apply) apply(change.input, trip, updateTrip);
+    setPending((p) => ({ ...p, [id]: { ...p[id], status: "approved" } }));
+  };
+  const reject = (id) => setPending((p) => ({ ...p, [id]: { ...p[id], status: "rejected" } }));
+
+  if (!open) return <AssistantButton t={t} onClick={() => setOpen(true)} />;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" style={{ background: "rgba(40,38,28,.45)" }} onClick={() => setOpen(false)}>
+      <div onClick={(e) => e.stopPropagation()} className="w-full sm:rounded-3xl rounded-t-3xl overflow-hidden flex flex-col"
+        style={{ background: t.paper2, maxWidth: 560, height: "88vh", maxHeight: 720, border: `1px solid ${t.line}`, position: "relative", zIndex: 0 }}>
+        <div className="flex items-center justify-between px-5 py-4" style={{ borderBottom: `1px solid ${t.line}`, background: t.paper }}>
+          <div className="flex items-center gap-2">
+            <Sparkles size={18} color={t.primary} />
+            <h3 style={{ fontFamily: "Georgia, serif", color: t.ink, fontSize: 17, margin: 0 }}>Trip Assistant</h3>
+          </div>
+          <button onClick={() => setOpen(false)} style={{ color: t.sub }}><X size={22} /></button>
+        </div>
+
+        <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+          {messages.length === 0 && (
+            <div style={{ fontSize: 13, color: t.sub, lineHeight: 1.5, textAlign: "center", padding: "20px 10px" }}>
+              Ask about the trip, or ask me to update the itinerary, checklist, budget, or reservations — attach a screenshot if it helps (paste with Ctrl+V, or the image button below). I'll propose changes for you to approve, never save anything on my own.
+            </div>
+          )}
+          {messages.map((m, i) => {
+            const textBlocks = (m.content || []).filter((b) => b.type === "text" || b.type === "image");
+            const toolBlocks = (m.content || []).filter((b) => b.type === "tool_use");
+            if (textBlocks.length === 0 && toolBlocks.length === 0) return null;
+            const isUser = m.role === "user";
+            return (
+              <div key={i} className={isUser ? "flex justify-end" : "flex justify-start"}>
+                <div style={{ maxWidth: "85%" }} className="space-y-2">
+                  {textBlocks.map((b, bi) => b.type === "text" ? (
+                    <div key={bi} className="rounded-2xl px-3.5 py-2.5" style={{
+                      background: isUser ? t.primary : t.card, color: isUser ? "#fff" : t.ink,
+                      fontSize: 13.5, lineHeight: 1.4, border: isUser ? "none" : `1px solid ${t.line}`,
+                    }}>{b.text}</div>
+                  ) : (
+                    <div key={bi} className="rounded-2xl overflow-hidden" style={{ border: `1px solid ${t.line}`, maxWidth: 200 }}>
+                      <img src={`data:${b.source.media_type};base64,${b.source.data}`} alt="attached" style={{ display: "block", width: "100%" }} />
+                    </div>
+                  ))}
+                  {toolBlocks.map((b) => (
+                    <ChangeCard key={b.id} t={t} toolName={b.name} input={b.input} trip={trip}
+                      status={pending[b.id]?.status || "pending"} onApprove={() => approve(b.id)} onReject={() => reject(b.id)} />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+          {busy && <div style={{ fontSize: 12.5, color: t.sub, fontStyle: "italic" }}>Thinking…</div>}
+          {errorMsg && <div style={{ fontSize: 12.5, color: t.danger }}>{errorMsg}</div>}
+        </div>
+
+        <div className="px-4 py-3" style={{ borderTop: `1px solid ${t.line}`, background: t.paper }}>
+          {attachedImage && (
+            <div className="flex items-center gap-2 mb-2 rounded-xl px-2.5 py-1.5" style={{ background: t.primarySoft, fontSize: 12, color: t.primaryDark }}>
+              <ImagePlus size={14} /> {attachedImage.name}
+              <button onClick={() => setAttachedImage(null)} className="ml-auto" style={{ color: t.primaryDark }}><X size={14} /></button>
+            </div>
+          )}
+          <div className="flex items-end gap-2">
+            <label style={{ color: t.sub, cursor: "pointer", flexShrink: 0 }} title="Attach a screenshot">
+              <ImagePlus size={20} />
+              <input type="file" accept="image/*" className="hidden" onChange={(e) => handleImageFile(e.target.files?.[0])} />
+            </label>
+            <textarea value={input} onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
+              placeholder="Ask or tell me what to change…" disabled={busy}
+              style={{ ...inputStyle(t), flex: 1, minHeight: 40, maxHeight: 100, resize: "none" }} />
+            <Btn t={t} onClick={sendMessage} style={{ flexShrink: 0 }} title="Send">
+              <Send size={16} />
+            </Btn>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
