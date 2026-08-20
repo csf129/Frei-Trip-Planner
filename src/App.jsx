@@ -1710,11 +1710,36 @@ function NewTripModal({ open, onClose, onSave, t }) {
 /*  directly -- approved changes route through the same updateTrip()   */
 /*  shapes the regular Add/Edit modals already use.                    */
 /* ------------------------------------------------------------------ */
+// Structural day-schedule ops (shift/reorder/insert/remove) do date math
+// here in plain code, not via AI generation -- e.g. "push everything from
+// Day 6 onward by 2 days" is one cheap tool call instead of the AI
+// rewriting 10 full day objects just to change their dates.
+const shiftDate = (dateStr, deltaDays) => {
+  const d = pd(dateStr);
+  d.setDate(d.getDate() + deltaDays);
+  return iso(d);
+};
+const dateAtOffset = (startDateStr, offsetDays) => shiftDate(startDateStr, offsetDays);
+
 const TOOL_SUMMARY = {
   update_day: (input, trip) => {
     const day = trip.days.find((d) => d.id === input.dayId);
     const fields = Object.keys(input).filter((k) => k !== "dayId");
     return `Update Day ${day ? day.n : "?"} (${fields.join(", ") || "no fields"})`;
+  },
+  shift_days: (input, trip) => {
+    const day = trip.days.find((d) => d.id === input.fromDayId);
+    const dir = input.deltaDays > 0 ? "later" : "earlier";
+    return `Shift Day ${day ? day.n : "?"} onward ${Math.abs(input.deltaDays)} day(s) ${dir}`;
+  },
+  reorder_days: (input) => `Reorder ${input.dayIds?.length || 0} days`,
+  insert_day: (input, trip) => {
+    const after = trip.days.find((d) => d.id === input.afterDayId);
+    return `Insert a new day ("${input.title || "untitled"}") after ${after ? `Day ${after.n}` : "the start"}`;
+  },
+  remove_day: (input, trip) => {
+    const day = trip.days.find((d) => d.id === input.dayId);
+    return `Remove Day ${day ? day.n : "?"}${day ? ` (${day.title})` : ""}`;
   },
   add_todo: (input) => `Add checklist item: "${input.title}"`,
   update_todo: (input, trip) => {
@@ -1743,6 +1768,32 @@ const TOOL_APPLY = {
   update_day: (input, trip, updateTrip) => {
     const { dayId, ...patch } = input;
     updateTrip({ days: trip.days.map((d) => d.id === dayId ? { ...d, ...patch } : d) });
+  },
+  shift_days: (input, trip, updateTrip) => {
+    const idx = trip.days.findIndex((d) => d.id === input.fromDayId);
+    if (idx === -1) return;
+    const days = trip.days.map((d, i) => i >= idx ? { ...d, date: shiftDate(d.date, input.deltaDays) } : d);
+    updateTrip({ days, startDate: days[0].date, endDate: days[days.length - 1].date });
+  },
+  reorder_days: (input, trip, updateTrip) => {
+    const order = input.dayIds || [];
+    const byId = new Map(trip.days.map((d) => [d.id, d]));
+    if (order.length !== trip.days.length || !order.every((id) => byId.has(id))) return; // mismatched id list -- refuse rather than silently drop days
+    const days = order.map((id, i) => ({ ...byId.get(id), n: i + 1, date: dateAtOffset(trip.startDate, i) }));
+    updateTrip({ days, startDate: days[0].date, endDate: days[days.length - 1].date });
+  },
+  insert_day: (input, trip, updateTrip) => {
+    const { afterDayId, ...content } = input;
+    const newDay = { id: uid(), title: "", overnight: "", lodging: "", drive: "", plan: [], tags: [], hike: null, ...content };
+    const insertAt = afterDayId ? trip.days.findIndex((d) => d.id === afterDayId) + 1 : 0;
+    const raw = [...trip.days.slice(0, insertAt), newDay, ...trip.days.slice(insertAt)];
+    const days = raw.map((d, i) => ({ ...d, n: i + 1, date: dateAtOffset(trip.startDate, i) }));
+    updateTrip({ days, startDate: days[0].date, endDate: days[days.length - 1].date });
+  },
+  remove_day: (input, trip, updateTrip) => {
+    const raw = trip.days.filter((d) => d.id !== input.dayId);
+    const days = raw.map((d, i) => ({ ...d, n: i + 1, date: dateAtOffset(trip.startDate, i) }));
+    updateTrip({ days, startDate: days.length ? days[0].date : trip.startDate, endDate: days.length ? days[days.length - 1].date : trip.endDate });
   },
   add_todo: (input, trip, updateTrip) => {
     updateTrip({ todos: [...trip.todos, { done: false, due: "", notes: "", pri: "medium", ...input, id: uid() }] });

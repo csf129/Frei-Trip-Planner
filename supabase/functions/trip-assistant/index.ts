@@ -55,6 +55,59 @@ const TOOLS = [
     },
   },
   {
+    name: "shift_days",
+    description: "Shift the date of one day and every day after it by a number of days (positive = later, negative = earlier), keeping all content and order the same. Use this for schedule delays/advances (e.g. 'the ferry only runs Wednesdays, push everything from Day 6 onward by 2 days') instead of calling update_day repeatedly on each day -- this is far cheaper and does the date math for you. Does not apply it -- queues it for review.",
+    input_schema: {
+      type: "object",
+      properties: {
+        fromDayId: { type: "string", description: "The first day to shift; this day and all later days shift together" },
+        deltaDays: { type: "number", description: "Days to shift by; positive = later, negative = earlier" },
+      },
+      required: ["fromDayId", "deltaDays"],
+    },
+  },
+  {
+    name: "reorder_days",
+    description: "Rearrange the existing days into a new order (e.g. swap two days, move a day earlier). Content is preserved; dates and day numbers are recalculated automatically to stay sequential from the trip's start date. Provide ALL existing day ids in the new order -- omitting any is rejected. Prefer this over update_day when you're only changing the sequence, not the content. Does not apply it -- queues it for review.",
+    input_schema: {
+      type: "object",
+      properties: {
+        dayIds: { type: "array", items: { type: "string" }, description: "Every existing day id, in the new desired order" },
+      },
+      required: ["dayIds"],
+    },
+  },
+  {
+    name: "insert_day",
+    description: "Insert a brand-new day into the itinerary at a given position. All later days automatically shift later by one day (dates and day numbers recalculated for you). Does not apply it -- queues it for review.",
+    input_schema: {
+      type: "object",
+      properties: {
+        afterDayId: { type: ["string", "null"], description: "Insert after this existing day id, or null to insert as the new Day 1" },
+        title: { type: "string" },
+        overnight: { type: "string" },
+        lodging: { type: "string" },
+        drive: { type: "string" },
+        plan: { type: "array", items: { type: "string" } },
+        tags: { type: "array", items: { type: "string" } },
+        hike: {
+          type: ["object", "null"],
+          properties: { name: { type: "string" }, diff: { type: "string" }, note: { type: "string" } },
+        },
+      },
+      required: ["title", "overnight"],
+    },
+  },
+  {
+    name: "remove_day",
+    description: "Remove a day from the itinerary. All later days automatically shift earlier by one day (dates and day numbers recalculated for you). Does not apply it -- queues it for review.",
+    input_schema: {
+      type: "object",
+      properties: { dayId: { type: "string" } },
+      required: ["dayId"],
+    },
+  },
+  {
     name: "add_todo",
     description: "Queue a new pre-trip checklist item. Does not apply it -- queues it for review.",
     input_schema: {
@@ -172,7 +225,9 @@ function json(body: unknown, status = 200) {
 function systemPrompt(trip: unknown) {
   return `You are the trip-planning assistant inside "Fern & Ferry", a family trip planner app. You're helping plan the trip described below. Answer questions directly and helpfully. When the user asks you to change something -- update a day's plan, add a checklist item, log an expense, add or update a reservation, etc. -- call the matching tool. Calling a tool ONLY queues that change for the family to review and approve in the app; it is never applied immediately, so feel free to propose changes when they'd clearly help, and briefly say what you proposed. Always use real ids from the trip data below when referencing an existing day/todo/reservation -- never invent one. Keep replies concise and conversational.
 
-IMPORTANT -- pace yourself on big requests: the server that runs you has its own time limit per reply, separate from your token budget, and a reply that tries to do too much can be cut off with nothing delivered at all. If a request would mean touching more than about 4-5 days/items in one go (e.g. "reshuffle the whole itinerary around this new ferry schedule"), do NOT attempt it all in one reply. Instead: propose changes for the first 4-5 items, briefly say what's left to do, and let the conversation continue -- the user (or you, next turn) can pick up the rest. Smaller requests don't need this.
+SCHEDULE CHANGES -- prefer the cheap structural tools: for anything about WHEN or in what ORDER days happen -- a delay, an early start, swapping days, inserting or removing a day -- always use shift_days / reorder_days / insert_day / remove_day instead of calling update_day on every affected day. These do the date/renumbering math for you in one call, whereas rewriting each day's full content via update_day is slow and expensive. Example: "the ferry only runs Wednesdays, push everything from Day 6 on by 2 days" is exactly one shift_days call, not six update_day calls. Only reach for update_day when a day's actual content (title, plan steps, overnight, hike, etc) needs to change, not just its date or position.
+
+IMPORTANT -- pace yourself on big requests: the server that runs you has its own time limit per reply, separate from your token budget, and a reply that tries to do too much can be cut off with nothing delivered at all. If a request would still mean touching more than about 4-5 days/items with update_day in one go (i.e. real content changes, not just schedule shifts, which the structural tools above already handle cheaply), don't attempt it all in one reply -- propose the first 4-5, briefly say what's left, and let the conversation continue.
 
 Current trip data (JSON):
 ${JSON.stringify(trip)}`;
