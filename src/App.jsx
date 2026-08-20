@@ -1236,7 +1236,16 @@ function ReservationEditModal({ reservation, onClose, onSave, onDelete, t, trip 
       if (upErr) throw upErr;
       setStatus("Reading with AI…");
       const { data, error: fnErr } = await supabase.functions.invoke("parse-reservation", { body: { path } });
-      if (fnErr) throw fnErr;
+      if (fnErr) {
+        // supabase-js's error.message is a generic "non-2xx status" wrapper --
+        // the useful detail is in the response body it wraps.
+        let detail = fnErr.message;
+        try {
+          const body = await fnErr.context?.json();
+          if (body?.error) detail = body.error;
+        } catch { /* body wasn't JSON, fall back to the generic message */ }
+        throw new Error(detail);
+      }
       if (data?.error) throw new Error(data.error);
       setR((prev) => ({
         ...prev,

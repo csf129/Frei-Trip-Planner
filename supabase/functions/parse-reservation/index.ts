@@ -64,6 +64,14 @@ async function toBase64(blob: Blob) {
 }
 
 async function callAnthropic(apiKey: string, base64: string, mediaType: string) {
+  // The Messages API's `image` content block only accepts raster image
+  // media types (jpeg/png/gif/webp) -- a PDF sent that way is rejected.
+  // PDFs need the separate `document` block type instead.
+  const isPdf = mediaType === "application/pdf";
+  const fileBlock = isPdf
+    ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } }
+    : { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } };
+
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -78,8 +86,8 @@ async function callAnthropic(apiKey: string, base64: string, mediaType: string) 
       messages: [{
         role: "user",
         content: [
-          { type: "image", source: { type: "base64", media_type: mediaType, data: base64 } },
-          { type: "text", text: "Extract the reservation details from this image." },
+          fileBlock,
+          { type: "text", text: `Extract the reservation details from this ${isPdf ? "document" : "image"}.` },
         ],
       }],
     }),
@@ -90,6 +98,13 @@ async function callAnthropic(apiKey: string, base64: string, mediaType: string) 
 }
 
 async function callOpenAI(apiKey: string, base64: string, mediaType: string) {
+  // OpenAI's chat completions vision endpoint only takes actual images via
+  // image_url -- PDFs need a separate Files/Assistants flow this function
+  // doesn't implement. Fail clearly instead of sending a PDF as an "image".
+  if (mediaType === "application/pdf") {
+    throw new Error("PDF parsing needs an ANTHROPIC_API_KEY secret -- OpenAI's vision API here only supports image files (JPG/PNG/etc).");
+  }
+
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
