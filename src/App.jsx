@@ -680,25 +680,73 @@ function ReminderRow({ x, t, today, overdue }) {
 /* ------------------------------------------------------------------ */
 const DAY_STOPS = {
   "ns-nl-2027": {
-    1: [{ name: "Plainville, MA", lat: 42.0084, lng: -71.3373 }, { name: "Bar Harbor, ME", lat: 44.3876, lng: -68.2039 }, { name: "Yarmouth, NS", lat: 43.8374, lng: -66.1174 }],
+    1: [{ name: "Plainville, MA", lat: 42.0084, lng: -71.3373 }, { name: "Bar Harbor, ME", lat: 44.3876, lng: -68.2039, ferry: true }, { name: "Yarmouth, NS", lat: 43.8374, lng: -66.1174 }],
     2: [{ name: "Yarmouth, NS", lat: 43.8374, lng: -66.1174 }, { name: "Lunenburg, NS", lat: 44.3776, lng: -64.3103 }, { name: "Peggy's Cove, NS", lat: 44.4926, lng: -63.9188 }],
     3: [{ name: "Peggy's Cove, NS", lat: 44.4926, lng: -63.9188 }, { name: "Baddeck, NS", lat: 46.1004, lng: -60.7530 }],
     4: [{ name: "Baddeck, NS", lat: 46.1004, lng: -60.7530 }, { name: "Middle Head / Ingonish, NS", lat: 46.6580, lng: -60.3796 }],
     5: [{ name: "Baddeck, NS", lat: 46.1004, lng: -60.7530 }, { name: "Uisge Bàn Falls trailhead", lat: 46.0201, lng: -60.6270 }],
-    6: [{ name: "Baddeck, NS", lat: 46.1004, lng: -60.7530 }, { name: "North Sydney, NS", lat: 46.2151, lng: -60.2564 }, { name: "Argentia, NL", lat: 47.2989, lng: -53.9909 }],
+    6: [{ name: "Baddeck, NS", lat: 46.1004, lng: -60.7530 }, { name: "North Sydney, NS", lat: 46.2151, lng: -60.2564, ferry: true }, { name: "Argentia, NL", lat: 47.2989, lng: -53.9909 }],
     7: [{ name: "Argentia, NL", lat: 47.2989, lng: -53.9909 }, { name: "Twillingate, NL", lat: 49.6425, lng: -54.7458 }],
     8: [{ name: "Twillingate, NL", lat: 49.6425, lng: -54.7458 }, { name: "Long Point Lighthouse", lat: 49.6772, lng: -54.7756 }],
     9: [{ name: "Twillingate, NL", lat: 49.6425, lng: -54.7458 }, { name: "Lower Little Harbour, NL", lat: 49.6198, lng: -54.7524 }],
     10: [{ name: "Twillingate, NL", lat: 49.6425, lng: -54.7458 }, { name: "Rocky Harbour, NL (Gros Morne)", lat: 49.5892, lng: -57.8763 }],
     11: [{ name: "Rocky Harbour, NL", lat: 49.5892, lng: -57.8763 }, { name: "Western Brook Pond trailhead", lat: 49.7648, lng: -57.8933 }],
     12: [{ name: "Rocky Harbour, NL", lat: 49.5892, lng: -57.8763 }, { name: "Tablelands Trail", lat: 49.4931, lng: -57.9522 }],
-    13: [{ name: "Rocky Harbour, NL", lat: 49.5892, lng: -57.8763 }, { name: "Port aux Basques, NL", lat: 47.5711, lng: -59.1400 }, { name: "North Sydney, NS", lat: 46.2151, lng: -60.2564 }],
+    13: [{ name: "Rocky Harbour, NL", lat: 49.5892, lng: -57.8763 }, { name: "Port aux Basques, NL", lat: 47.5711, lng: -59.1400, ferry: true }, { name: "North Sydney, NS", lat: 46.2151, lng: -60.2564 }],
     14: [{ name: "North Sydney, NS", lat: 46.2151, lng: -60.2564 }, { name: "Burntcoat Head, NS", lat: 45.3106, lng: -63.7994 }],
     15: [{ name: "Burntcoat Head, NS", lat: 45.3106, lng: -63.7994 }, { name: "Plainville, MA", lat: 42.0084, lng: -71.3373 }],
   },
 };
 
+// Splits a day's stops into road-drivable runs and ferry hops (a stop
+// flagged `ferry: true` means the leg FROM it TO the next stop is a
+// crossing, not a road). Road runs get real routing; ferry hops always
+// render as a straight dashed line since there's no road to trace.
+function buildMapSegments(stops) {
+  const segments = [];
+  let run = [stops[0]];
+  for (let i = 1; i < stops.length; i++) {
+    if (stops[i - 1].ferry) {
+      if (run.length > 1) segments.push({ type: "drive", points: run });
+      segments.push({ type: "ferry", points: [stops[i - 1], stops[i]] });
+      run = [stops[i]];
+    } else {
+      run.push(stops[i]);
+    }
+  }
+  if (run.length > 1) segments.push({ type: "drive", points: run });
+  return segments;
+}
+
+// Free public OSRM demo routing (no key, no billing) -- matches the
+// free-tile choice for the map itself. It's a shared demo instance, not an
+// SLA'd production service, so every call site here falls back to a
+// straight line on any failure rather than breaking the map.
+async function fetchRoadRoute(points) {
+  const coords = points.map((p) => `${p.lng},${p.lat}`).join(";");
+  const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`);
+  if (!res.ok) throw new Error("routing request failed");
+  const data = await res.json();
+  const geometry = data.routes?.[0]?.geometry?.coordinates;
+  if (data.code !== "Ok" || !geometry) throw new Error("no route found");
+  return geometry.map(([lng, lat]) => [lat, lng]);
+}
+
 function DayMap({ t, stops, planPreview }) {
+  const segments = useMemo(() => (stops && stops.length > 1 ? buildMapSegments(stops) : []), [stops]);
+  const [roadGeometry, setRoadGeometry] = useState({});
+
+  useEffect(() => {
+    let cancelled = false;
+    segments.forEach((seg, i) => {
+      if (seg.type !== "drive") return;
+      fetchRoadRoute(seg.points)
+        .then((geo) => { if (!cancelled) setRoadGeometry((prev) => ({ ...prev, [i]: geo })); })
+        .catch(() => { if (!cancelled) setRoadGeometry((prev) => ({ ...prev, [i]: "error" })); });
+    });
+    return () => { cancelled = true; };
+  }, [segments]);
+
   if (!stops || stops.length === 0) return null;
   const bounds = stops.map((s) => [s.lat, s.lng]);
   return (
@@ -708,7 +756,15 @@ function DayMap({ t, stops, planPreview }) {
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
-        <Polyline positions={bounds} pathOptions={{ color: t.primary, weight: 3, dashArray: "6 8" }} />
+        {segments.map((seg, i) => {
+          const straight = seg.points.map((p) => [p.lat, p.lng]);
+          if (seg.type === "ferry") {
+            return <Polyline key={i} positions={straight} pathOptions={{ color: t.water, weight: 3, dashArray: "2 8" }} />;
+          }
+          const geo = roadGeometry[i];
+          const onRoad = Array.isArray(geo);
+          return <Polyline key={i} positions={onRoad ? geo : straight} pathOptions={{ color: t.primary, weight: 3, dashArray: onRoad ? undefined : "6 8" }} />;
+        })}
         {stops.map((s, i) => (
           <Marker key={i} position={[s.lat, s.lng]}
             eventHandlers={{ click: () => window.open(`https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`, "_blank", "noopener") }}>
