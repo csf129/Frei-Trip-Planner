@@ -744,7 +744,7 @@ function Itinerary({ t, trip, updateTrip, canEdit, setView, setFocusReservationI
     <div className="space-y-3">
       <SectionHeader t={t} title={trip.name} sub={`${fmtLong(trip.startDate)} → ${fmtLong(trip.endDate)}`} />
       {trip.days.map((d) => {
-        const dayReservations = (trip.reservations || []).filter((r) => r.dayId === d.id);
+        const dayReservations = (trip.reservations || []).filter((r) => reservationDayIds(r).includes(d.id));
         return (
         <Card key={d.id} t={t}>
           <div className="px-4 pt-3.5 pb-3">
@@ -1068,9 +1068,13 @@ const RESERVATION_TYPES = ["Hotel", "Ferry", "Tour", "Flight", "Car Rental", "Ot
 const RES_TYPE_ICON = { Hotel: Home, Ferry: Ship, Tour: Camera, Flight: Plane, "Car Rental": Car, Other: FileText };
 const BOOKABLE_CATEGORIES = ["Ferries", "Lodging", "Tours"];
 const CAT_TO_RES_TYPE = { Ferries: "Ferry", Lodging: "Hotel", Tours: "Tour" };
+// Reservations used to store a single `dayId`; multi-day linking needs an
+// array. Fall back to the old field so reservations saved before this
+// change keep working without a data migration.
+const reservationDayIds = (r) => r.dayIds || (r.dayId ? [r.dayId] : []);
 const blankReservation = () => ({
   type: "Hotel", title: "", host: "", location: "", confirmationNumber: "",
-  startDate: "", endDate: "", startTime: "", endTime: "", dayId: "", todoId: "", notes: "", filePath: null,
+  startDate: "", endDate: "", startTime: "", endTime: "", dayIds: [], todoId: "", notes: "", filePath: null,
 });
 
 function Reservations({ t, trip, updateTrip, canEdit, focusReservationId, setFocusReservationId }) {
@@ -1169,9 +1173,18 @@ function BookingRow({ x, t, canEdit, reservations, onAdd, onEditReservation }) {
   );
 }
 
+function dayRangeLabel(dayNumbers) {
+  const ns = [...dayNumbers].sort((a, b) => a - b);
+  if (ns.length === 0) return null;
+  if (ns.length === 1) return `Day ${ns[0]}`;
+  const contiguous = ns.every((n, i) => i === 0 || n === ns[i - 1] + 1);
+  return contiguous ? `Days ${ns[0]}–${ns[ns.length - 1]}` : `Days ${ns.join(", ")}`;
+}
+
 function ReservationRow({ r, t, trip, onEdit }) {
   const Icon = RES_TYPE_ICON[r.type] || FileText;
-  const day = trip.days.find((d) => d.id === r.dayId);
+  const days = reservationDayIds(r).map((id) => trip.days.find((d) => d.id === id)).filter(Boolean);
+  const dayLabel = dayRangeLabel(days.map((d) => d.n));
   const todo = trip.todos.find((x) => x.id === r.todoId);
   return (
     <Card t={t} style={{ padding: 0 }} onClick={onEdit}>
@@ -1194,7 +1207,7 @@ function ReservationRow({ r, t, trip, onEdit }) {
               </span>
             )}
             {r.confirmationNumber && <span style={{ fontSize: 11, color: t.sub }}>Conf# {r.confirmationNumber}</span>}
-            {day && <span style={{ fontSize: 11, color: t.primary, fontWeight: 600 }}>Day {day.n}</span>}
+            {dayLabel && <span style={{ fontSize: 11, color: t.primary, fontWeight: 600 }}>{dayLabel}</span>}
             {todo && <span className="inline-flex items-center gap-1" style={{ fontSize: 11, color: t.sub }}><ListChecks size={11} /> {todo.title}</span>}
           </div>
         </div>
@@ -1208,7 +1221,10 @@ function ReservationEditModal({ reservation, onClose, onSave, onDelete, t, trip 
   const [r, setR] = useState(reservation);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
-  useEffect(() => { setR(reservation); setStatus(""); }, [reservation]);
+  useEffect(() => {
+    setR(reservation ? { ...reservation, dayIds: reservationDayIds(reservation) } : reservation);
+    setStatus("");
+  }, [reservation]);
 
   const handleFile = async (file) => {
     if (!file) return;
@@ -1280,20 +1296,27 @@ function ReservationEditModal({ reservation, onClose, onSave, onDelete, t, trip 
         <Field label="Start time" t={t}><input type="time" style={inputStyle(t)} value={r.startTime} onChange={(e) => setR({ ...r, startTime: e.target.value })} /></Field>
         <Field label="End time" t={t}><input type="time" style={inputStyle(t)} value={r.endTime} onChange={(e) => setR({ ...r, endTime: e.target.value })} /></Field>
       </div>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Linked day (optional)" t={t}>
-          <select style={inputStyle(t)} value={r.dayId || ""} onChange={(e) => setR({ ...r, dayId: e.target.value })}>
-            <option value="">—</option>
-            {trip.days.map((d) => <option key={d.id} value={d.id}>Day {d.n} · {fmtShort(d.date)} · {d.overnight}</option>)}
-          </select>
-        </Field>
-        <Field label="Linked checklist item (optional)" t={t}>
-          <select style={inputStyle(t)} value={r.todoId || ""} onChange={(e) => setR({ ...r, todoId: e.target.value })}>
-            <option value="">—</option>
-            {trip.todos.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}
-          </select>
-        </Field>
-      </div>
+      <Field label="Linked days (optional — pick more than one for a multi-night stay)" t={t}>
+        <div className="flex flex-wrap gap-1.5 p-2 rounded-xl" style={{ border: `1px solid ${t.line}`, maxHeight: 160, overflowY: "auto" }}>
+          {trip.days.map((d) => {
+            const on = (r.dayIds || []).includes(d.id);
+            return (
+              <button key={d.id} type="button"
+                onClick={() => setR({ ...r, dayIds: on ? r.dayIds.filter((id) => id !== d.id) : [...(r.dayIds || []), d.id] })}
+                className="rounded-full px-2.5 py-1" title={`${fmtShort(d.date)} · ${d.overnight}`}
+                style={{ fontSize: 11.5, fontWeight: 600, background: on ? t.primary : t.paper2, color: on ? "#fff" : t.sub, border: `1px solid ${on ? t.primary : t.line}` }}>
+                Day {d.n}
+              </button>
+            );
+          })}
+        </div>
+      </Field>
+      <Field label="Linked checklist item (optional)" t={t}>
+        <select style={inputStyle(t)} value={r.todoId || ""} onChange={(e) => setR({ ...r, todoId: e.target.value })}>
+          <option value="">—</option>
+          {trip.todos.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}
+        </select>
+      </Field>
       <Field label="Notes" t={t}><textarea style={{ ...inputStyle(t), minHeight: 70, resize: "vertical" }} value={r.notes} onChange={(e) => setR({ ...r, notes: e.target.value })} /></Field>
 
       <div className="flex justify-between items-center mt-2">
