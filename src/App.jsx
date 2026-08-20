@@ -964,7 +964,7 @@ function Todos({ t, trip, updateTrip, state, canEdit }) {
   const open = list.filter((x) => !x.done).sort((a, b) => (a.due || "9").localeCompare(b.due || "9"));
   const done = list.filter((x) => x.done);
   const pct = trip.todos.length ? Math.round(trip.todos.filter((x) => x.done).length / trip.todos.length * 100) : 0;
-  const reservedIds = new Set((trip.reservations || []).filter((r) => r.todoId).map((r) => r.todoId));
+  const reservedIds = new Set((trip.reservations || []).flatMap((r) => reservationTodoIds(r)));
 
   return (
     <div className="space-y-4">
@@ -1072,9 +1072,10 @@ const CAT_TO_RES_TYPE = { Ferries: "Ferry", Lodging: "Hotel", Tours: "Tour" };
 // array. Fall back to the old field so reservations saved before this
 // change keep working without a data migration.
 const reservationDayIds = (r) => r.dayIds || (r.dayId ? [r.dayId] : []);
+const reservationTodoIds = (r) => r.todoIds || (r.todoId ? [r.todoId] : []);
 const blankReservation = () => ({
   type: "Hotel", title: "", host: "", location: "", confirmationNumber: "",
-  startDate: "", endDate: "", startTime: "", endTime: "", dayIds: [], todoId: "", notes: "", filePath: null,
+  startDate: "", endDate: "", startTime: "", endTime: "", dayIds: [], todoIds: [], notes: "", filePath: null,
 });
 
 function Reservations({ t, trip, updateTrip, canEdit, focusReservationId, setFocusReservationId }) {
@@ -1099,9 +1100,9 @@ function Reservations({ t, trip, updateTrip, canEdit, focusReservationId, setFoc
 
   const sorted = [...list].sort((a, b) => (a.startDate || "9").localeCompare(b.startDate || "9"));
   const bookable = trip.todos.filter((x) => BOOKABLE_CATEGORIES.includes(x.cat));
-  const openCount = bookable.filter((x) => !list.some((r) => r.todoId === x.id)).length;
+  const openCount = bookable.filter((x) => !list.some((r) => reservationTodoIds(r).includes(x.id))).length;
 
-  const addForTodo = (x) => setEdit({ ...blankReservation(), type: CAT_TO_RES_TYPE[x.cat] || "Other", title: x.title, todoId: x.id });
+  const addForTodo = (x) => setEdit({ ...blankReservation(), type: CAT_TO_RES_TYPE[x.cat] || "Other", title: x.title, todoIds: [x.id] });
 
   return (
     <div className="space-y-4">
@@ -1146,7 +1147,7 @@ function Reservations({ t, trip, updateTrip, canEdit, focusReservationId, setFoc
 
 function BookingRow({ x, t, canEdit, reservations, onAdd, onEditReservation }) {
   const Icon = CAT_ICON[x.cat] || Circle;
-  const linked = reservations.filter((r) => r.todoId === x.id);
+  const linked = reservations.filter((r) => reservationTodoIds(r).includes(x.id));
   const booked = linked.length > 0;
   return (
     <Card t={t} style={{ padding: 0 }}>
@@ -1185,7 +1186,7 @@ function ReservationRow({ r, t, trip, onEdit }) {
   const Icon = RES_TYPE_ICON[r.type] || FileText;
   const days = reservationDayIds(r).map((id) => trip.days.find((d) => d.id === id)).filter(Boolean);
   const dayLabel = dayRangeLabel(days.map((d) => d.n));
-  const todo = trip.todos.find((x) => x.id === r.todoId);
+  const todos = reservationTodoIds(r).map((id) => trip.todos.find((x) => x.id === id)).filter(Boolean);
   return (
     <Card t={t} style={{ padding: 0 }} onClick={onEdit}>
       <div className="flex items-start gap-3 px-3.5 py-3" style={{ cursor: onEdit ? "pointer" : "default" }}>
@@ -1208,7 +1209,11 @@ function ReservationRow({ r, t, trip, onEdit }) {
             )}
             {r.confirmationNumber && <span style={{ fontSize: 11, color: t.sub }}>Conf# {r.confirmationNumber}</span>}
             {dayLabel && <span style={{ fontSize: 11, color: t.primary, fontWeight: 600 }}>{dayLabel}</span>}
-            {todo && <span className="inline-flex items-center gap-1" style={{ fontSize: 11, color: t.sub }}><ListChecks size={11} /> {todo.title}</span>}
+            {todos.length > 0 && (
+              <span className="inline-flex items-center gap-1" style={{ fontSize: 11, color: t.sub }}>
+                <ListChecks size={11} /> {todos.map((x) => x.title).join(", ")}
+              </span>
+            )}
           </div>
         </div>
         {onEdit && <Pencil size={15} color={t.sub} style={{ flexShrink: 0 }} />}
@@ -1222,7 +1227,7 @@ function ReservationEditModal({ reservation, onClose, onSave, onDelete, t, trip 
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   useEffect(() => {
-    setR(reservation ? { ...reservation, dayIds: reservationDayIds(reservation) } : reservation);
+    setR(reservation ? { ...reservation, dayIds: reservationDayIds(reservation), todoIds: reservationTodoIds(reservation) } : reservation);
     setStatus("");
   }, [reservation]);
 
@@ -1320,11 +1325,19 @@ function ReservationEditModal({ reservation, onClose, onSave, onDelete, t, trip 
           })}
         </div>
       </Field>
-      <Field label="Linked checklist item (optional)" t={t}>
-        <select style={inputStyle(t)} value={r.todoId || ""} onChange={(e) => setR({ ...r, todoId: e.target.value })}>
-          <option value="">—</option>
-          {trip.todos.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}
-        </select>
+      <Field label="Linked checklist items (optional — pick more than one if it covers several)" t={t}>
+        <div className="space-y-0.5 p-2 rounded-xl" style={{ border: `1px solid ${t.line}`, maxHeight: 160, overflowY: "auto" }}>
+          {trip.todos.map((x) => {
+            const on = (r.todoIds || []).includes(x.id);
+            return (
+              <label key={x.id} className="flex items-center gap-2 px-1.5 py-1 rounded-lg" style={{ fontSize: 12.5, color: t.ink, cursor: "pointer", background: on ? t.primarySoft : "transparent" }}>
+                <input type="checkbox" checked={on}
+                  onChange={() => setR({ ...r, todoIds: on ? r.todoIds.filter((id) => id !== x.id) : [...(r.todoIds || []), x.id] })} />
+                <span className="truncate">{x.title}</span>
+              </label>
+            );
+          })}
+        </div>
       </Field>
       <Field label="Notes" t={t}><textarea style={{ ...inputStyle(t), minHeight: 70, resize: "vertical" }} value={r.notes} onChange={(e) => setR({ ...r, notes: e.target.value })} /></Field>
 
