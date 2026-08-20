@@ -1845,7 +1845,13 @@ function AssistantPanel({ t, trip, updateTrip }) {
       try {
         const body = await error.context?.json();
         if (body?.error) detail = body.error;
-      } catch { /* not JSON */ }
+        // No parseable body at all usually means the server's own time
+        // limit killed the request before it could reply -- not the
+        // generic-sounding message supabase-js falls back to.
+        else if (!body) detail = "That request timed out on the server — it was probably asking for too much at once. Try a smaller piece (e.g. a few days instead of the whole trip).";
+      } catch {
+        detail = "That request timed out on the server — it was probably asking for too much at once. Try a smaller piece (e.g. a few days instead of the whole trip).";
+      }
       throw new Error(detail);
     }
     if (data?.error) throw new Error(data.error);
