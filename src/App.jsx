@@ -673,31 +673,13 @@ function ReminderRow({ x, t, today, overdue }) {
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  DAY STOPS — approximate coordinates for the map, keyed by trip id  */
-/*  then day number. Not part of the shared/editable data model; if a  */
-/*  day isn't listed here, its card just shows no map.                */
-/* ------------------------------------------------------------------ */
-const DAY_STOPS = {
-  "ns-nl-2027": {
-    1: [{ name: "Plainville, MA", lat: 42.0084, lng: -71.3373 }, { name: "Bar Harbor, ME", lat: 44.3876, lng: -68.2039, ferry: true }, { name: "Yarmouth, NS", lat: 43.8374, lng: -66.1174 }],
-    2: [{ name: "Yarmouth, NS", lat: 43.8374, lng: -66.1174 }, { name: "Lunenburg, NS", lat: 44.3776, lng: -64.3103 }, { name: "Peggy's Cove, NS", lat: 44.4926, lng: -63.9188 }],
-    3: [{ name: "Peggy's Cove, NS", lat: 44.4926, lng: -63.9188 }, { name: "Baddeck, NS", lat: 46.1004, lng: -60.7530 }],
-    4: [{ name: "Baddeck, NS", lat: 46.1004, lng: -60.7530 }, { name: "Middle Head / Ingonish, NS", lat: 46.6580, lng: -60.3796 }],
-    5: [{ name: "Baddeck, NS", lat: 46.1004, lng: -60.7530 }, { name: "Uisge Bàn Falls trailhead", lat: 46.0201, lng: -60.6270 }],
-    6: [{ name: "Baddeck, NS", lat: 46.1004, lng: -60.7530 }, { name: "North Sydney, NS", lat: 46.2151, lng: -60.2564, ferry: true }, { name: "Argentia, NL", lat: 47.2989, lng: -53.9909 }],
-    7: [{ name: "Argentia, NL", lat: 47.2989, lng: -53.9909 }, { name: "Twillingate, NL", lat: 49.6425, lng: -54.7458 }],
-    8: [{ name: "Twillingate, NL", lat: 49.6425, lng: -54.7458 }, { name: "Long Point Lighthouse", lat: 49.6772, lng: -54.7756 }],
-    9: [{ name: "Twillingate, NL", lat: 49.6425, lng: -54.7458 }, { name: "Lower Little Harbour, NL", lat: 49.6198, lng: -54.7524 }],
-    10: [{ name: "Twillingate, NL", lat: 49.6425, lng: -54.7458 }, { name: "Rocky Harbour, NL (Gros Morne)", lat: 49.5892, lng: -57.8763 }],
-    11: [{ name: "Rocky Harbour, NL", lat: 49.5892, lng: -57.8763 }, { name: "Western Brook Pond trailhead", lat: 49.7648, lng: -57.8933 }],
-    12: [{ name: "Rocky Harbour, NL", lat: 49.5892, lng: -57.8763 }, { name: "Tablelands Trail", lat: 49.4931, lng: -57.9522 }],
-    13: [{ name: "Rocky Harbour, NL", lat: 49.5892, lng: -57.8763 }, { name: "Port aux Basques, NL", lat: 47.5711, lng: -59.1400, ferry: true }, { name: "North Sydney, NS", lat: 46.2151, lng: -60.2564 }],
-    14: [{ name: "North Sydney, NS", lat: 46.2151, lng: -60.2564 }, { name: "Burntcoat Head, NS", lat: 45.3106, lng: -63.7994 }],
-    15: [{ name: "Burntcoat Head, NS", lat: 45.3106, lng: -63.7994 }, { name: "Plainville, MA", lat: 42.0084, lng: -71.3373 }],
-  },
-};
-
+// Per-day map pins now live on the day itself (day.stops), not in a static
+// table keyed by number or id -- a static lookup can't stay correct once
+// the AI assistant (or anyone) edits a day's actual content/location, only
+// the day object itself can. The assistant's update_day/insert_day tools
+// accept an optional `stops` field so it can keep this in sync whenever it
+// changes where a day actually goes; a day with no stops yet just shows no
+// map (see DayMap below), same as before.
 // Splits a day's stops into road-drivable runs and ferry hops (a stop
 // flagged `ferry: true` means the leg FROM it TO the next stop is a
 // crossing, not a road). Road runs get real routing; ferry hops always
@@ -861,7 +843,7 @@ function Itinerary({ t, trip, updateTrip, canEdit, setView, setFocusReservationI
                 )}
               </div>
 
-              <DayMap t={t} stops={DAY_STOPS[trip.id]?.[d.n]} planPreview={d.plan[0]} />
+              <DayMap t={t} stops={d.stops} planPreview={d.plan[0]} />
             </div>
           </div>
         </Card>

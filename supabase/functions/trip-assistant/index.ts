@@ -34,7 +34,7 @@ const CORS_HEADERS = {
 const TOOLS = [
   {
     name: "update_day",
-    description: "Queue a proposed update to one existing itinerary day (route/plan text, drive time, overnight stop, lodging, tags, or the hike/excursion note). Does not apply the change -- it queues it for the user to review and approve.",
+    description: "Queue a proposed update to one existing itinerary day (route/plan text, drive time, overnight stop, lodging, tags, hike/excursion note, or map stops). Does not apply the change -- it queues it for the user to review and approve.",
     input_schema: {
       type: "object",
       properties: {
@@ -49,6 +49,20 @@ const TOOLS = [
           type: ["object", "null"],
           description: "Excursion/hike info, or null to remove it",
           properties: { name: { type: "string" }, diff: { type: "string" }, note: { type: "string" } },
+        },
+        stops: {
+          type: "array",
+          description: "IMPORTANT: whenever you change where this day actually goes (overnight, a new stop, a rerouted drive), include a full replacement list of map stops in visit order with your best-effort real-world coordinates, so the day's map stays accurate. Omit this field entirely if the day's locations aren't changing.",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              lat: { type: "number" },
+              lng: { type: "number" },
+              ferry: { type: "boolean", description: "true if the leg from this stop to the next one is a ferry/boat crossing, not a road" },
+            },
+            required: ["name", "lat", "lng"],
+          },
         },
       },
       required: ["dayId"],
@@ -93,6 +107,20 @@ const TOOLS = [
         hike: {
           type: ["object", "null"],
           properties: { name: { type: "string" }, diff: { type: "string" }, note: { type: "string" } },
+        },
+        stops: {
+          type: "array",
+          description: "Map stops for this new day, in visit order, with your best-effort real-world coordinates -- include this whenever you know where the day actually goes, so it gets a map immediately.",
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              lat: { type: "number" },
+              lng: { type: "number" },
+              ferry: { type: "boolean", description: "true if the leg from this stop to the next one is a ferry/boat crossing, not a road" },
+            },
+            required: ["name", "lat", "lng"],
+          },
         },
       },
       required: ["title", "overnight"],
@@ -225,7 +253,9 @@ function json(body: unknown, status = 200) {
 function systemPrompt(trip: unknown) {
   return `You are the trip-planning assistant inside "Fern & Ferry", a family trip planner app. You're helping plan the trip described below. Answer questions directly and helpfully. When the user asks you to change something -- update a day's plan, add a checklist item, log an expense, add or update a reservation, etc. -- call the matching tool. Calling a tool ONLY queues that change for the family to review and approve in the app; it is never applied immediately, so feel free to propose changes when they'd clearly help, and briefly say what you proposed. Always use real ids from the trip data below when referencing an existing day/todo/reservation -- never invent one. Keep replies concise and conversational.
 
-SCHEDULE CHANGES -- prefer the cheap structural tools: for anything about WHEN or in what ORDER days happen -- a delay, an early start, swapping days, inserting or removing a day -- always use shift_days / reorder_days / insert_day / remove_day instead of calling update_day on every affected day. These do the date/renumbering math for you in one call, whereas rewriting each day's full content via update_day is slow and expensive. Example: "the ferry only runs Wednesdays, push everything from Day 6 on by 2 days" is exactly one shift_days call, not six update_day calls. Only reach for update_day when a day's actual content (title, plan steps, overnight, hike, etc) needs to change, not just its date or position.
+SCHEDULE CHANGES -- prefer the cheap structural tools: for anything about WHEN or in what ORDER days happen -- a delay, an early start, swapping days, inserting or removing a day -- always use shift_days / reorder_days / insert_day / remove_day instead of calling update_day on every affected day. These do the date/renumbering math for you in one call, whereas rewriting each day's full content via update_day is slow and expensive. Example: "the ferry only runs Wednesdays, push everything from Day 6 on by 2 days" is exactly one shift_days call, not six update_day calls. Only reach for update_day when a day's actual content (title, plan steps, overnight, hike, etc) needs to change, not just its date or position. shift_days and reorder_days move whole days as-is, so a day's map stops travel with it automatically -- you don't need to touch them for a pure schedule change.
+
+MAP STOPS -- each day's real-world locations for its map live on the day itself (the `stops` field), not somewhere else, so they only go stale if you forget to update them. Whenever update_day changes where a day actually goes (overnight, an added/removed stop, a rerouted drive) or insert_day creates a new day, include a full replacement `stops` array with your best-effort real coordinates for every place visited that day, in order -- flag a stop's `ferry: true` if the leg to the next stop is a boat crossing, not a road. If a day's locations aren't changing, omit `stops` entirely and leave it as-is.
 
 IMPORTANT -- pace yourself on big requests: the server that runs you has its own time limit per reply, separate from your token budget, and a reply that tries to do too much can be cut off with nothing delivered at all. If a request would still mean touching more than about 4-5 days/items with update_day in one go (i.e. real content changes, not just schedule shifts, which the structural tools above already handle cheaply), don't attempt it all in one reply -- propose the first 4-5, briefly say what's left, and let the conversation continue.
 
