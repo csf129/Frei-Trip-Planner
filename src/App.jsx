@@ -7,7 +7,7 @@ import {
   ChevronLeft, ChevronRight, Circle, CheckCircle2, PiggyBank,
   DollarSign, Clock, Luggage, Camera, Flag, Info, Heart,
   Save, ListChecks, LayoutDashboard, ChevronDown, Ticket, Upload, Loader2, Plane,
-  Sparkles, Send, Check, ImagePlus,
+  Sparkles, Send, Check, ImagePlus, CreditCard,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RTooltip } from "recharts";
 import { MapContainer, TileLayer, Marker, Tooltip as LeafletTooltip, Polyline } from "react-leaflet";
@@ -1135,7 +1135,7 @@ const reservationTodoIds = (r) => r.todoIds || (r.todoId ? [r.todoId] : []);
 const blankReservation = () => ({
   type: "Hotel", title: "", host: "", location: "", confirmationNumber: "",
   startDate: "", endDate: "", startTime: "", endTime: "", dayIds: [], todoIds: [], notes: "", filePath: null,
-  cost: "", paymentDue: "", category: "",
+  cost: "", paymentDue: "", category: "", paid: false, paidDate: "", card: "",
 });
 
 function Reservations({ t, trip, updateTrip, canEdit, focusReservationId, setFocusReservationId, state }) {
@@ -1249,6 +1249,7 @@ function BookingRow({ x, t, cur, canEdit, reservations, onAdd, onEditReservation
   const linked = reservations.filter((r) => reservationTodoIds(r).includes(x.id));
   const booked = linked.length > 0;
   const cost = linked.reduce((s, r) => s + (+r.cost || 0), 0);
+  const allPaid = booked && linked.every((r) => r.paid);
   const nextDue = linked.map((r) => r.paymentDue).filter(Boolean).sort()[0];
   return (
     <Card t={t} style={{ padding: 0 }}>
@@ -1263,7 +1264,11 @@ function BookingRow({ x, t, cur, canEdit, reservations, onAdd, onEditReservation
         {booked && (cost > 0 || nextDue) && (
           <div className="text-right flex-shrink-0" style={{ marginRight: 4 }}>
             {cost > 0 && <div style={{ fontSize: 13, fontWeight: 700, color: t.ink }}>{money(cost, cur)}</div>}
-            {nextDue && <div style={{ fontSize: 10.5, color: t.sub }}>due {fmtShort(nextDue)}</div>}
+            {allPaid ? (
+              <div style={{ fontSize: 10.5, color: t.ok, fontWeight: 600 }}>Paid</div>
+            ) : nextDue ? (
+              <div style={{ fontSize: 10.5, color: t.sub }}>due {fmtShort(nextDue)}</div>
+            ) : null}
           </div>
         )}
         {booked ? (
@@ -1316,6 +1321,11 @@ function ReservationRow({ r, t, cur, trip, onEdit }) {
             )}
             {r.confirmationNumber && <span style={{ fontSize: 11, color: t.sub }}>Conf# {r.confirmationNumber}</span>}
             {dayLabel && <span style={{ fontSize: 11, color: t.primary, fontWeight: 600 }}>{dayLabel}</span>}
+            {r.card && (
+              <span className="inline-flex items-center gap-1" style={{ fontSize: 11, color: t.sub }}>
+                <CreditCard size={11} /> {r.card}
+              </span>
+            )}
             {todos.length > 0 && (
               <span className="inline-flex items-center gap-1" style={{ fontSize: 11, color: t.sub }}>
                 <ListChecks size={11} /> {todos.map((x) => x.title).join(", ")}
@@ -1326,7 +1336,13 @@ function ReservationRow({ r, t, cur, trip, onEdit }) {
         {(+r.cost > 0 || r.paymentDue) && (
           <div className="text-right flex-shrink-0">
             {+r.cost > 0 && <div style={{ fontSize: 14.5, fontWeight: 700, color: t.ink, fontFamily: "Georgia, serif" }}>{money(r.cost, cur)}</div>}
-            {r.paymentDue && <div style={{ fontSize: 10.5, color: t.sub, marginTop: 1 }}>due {fmtShort(r.paymentDue)}</div>}
+            {r.paid ? (
+              <div className="inline-flex items-center gap-1" style={{ fontSize: 10.5, color: t.ok, marginTop: 1, fontWeight: 600 }}>
+                <CheckCircle2 size={11} /> Paid {r.paidDate ? fmtShort(r.paidDate) : ""}
+              </div>
+            ) : r.paymentDue ? (
+              <div style={{ fontSize: 10.5, color: t.sub, marginTop: 1 }}>due {fmtShort(r.paymentDue)}</div>
+            ) : null}
           </div>
         )}
         {onEdit && <Pencil size={15} color={t.sub} style={{ flexShrink: 0 }} />}
@@ -1418,6 +1434,20 @@ function ReservationEditModal({ reservation, onClose, onSave, onDelete, t, trip 
       <div className="grid grid-cols-2 gap-3">
         <Field label="Cost" t={t}><input inputMode="decimal" style={inputStyle(t)} value={r.cost || ""} onChange={(e) => setR({ ...r, cost: e.target.value.replace(/[^0-9.]/g, "") })} placeholder="0.00" /></Field>
         <Field label="Payment due" t={t}><input type="date" style={inputStyle(t)} value={r.paymentDue || ""} onChange={(e) => setR({ ...r, paymentDue: e.target.value })} /></Field>
+      </div>
+      <Field label="Card charged" t={t}><input style={inputStyle(t)} value={r.card || ""} onChange={(e) => setR({ ...r, card: e.target.value })} placeholder="e.g. Chase Sapphire ...1234" /></Field>
+      <div className="flex items-center gap-3 rounded-2xl px-3 py-2.5 mb-3" style={{ background: t.paper2 }}>
+        <label className="flex items-center gap-2" style={{ fontSize: 13.5, fontWeight: 600, color: t.ink, cursor: "pointer" }}>
+          <input type="checkbox" checked={!!r.paid}
+            onChange={(e) => setR({ ...r, paid: e.target.checked, paidDate: e.target.checked ? (r.paidDate || todayISO()) : "" })} />
+          Paid
+        </label>
+        {r.paid && (
+          <>
+            <span style={{ fontSize: 12.5, color: t.sub }}>on</span>
+            <input type="date" style={{ ...inputStyle(t), width: 150 }} value={r.paidDate || ""} onChange={(e) => setR({ ...r, paidDate: e.target.value })} />
+          </>
+        )}
       </div>
       <Field label="Budget category (optional — feeds the Budget tab's actual-vs-estimate tally)" t={t}>
         <select style={inputStyle(t)} value={r.category || ""} onChange={(e) => setR({ ...r, category: e.target.value })}>
