@@ -1139,11 +1139,15 @@ function Reservations({ t, trip, updateTrip, canEdit, focusReservationId, setFoc
   };
   const del = (id) => { updateTrip({ reservations: list.filter((x) => x.id !== id) }); setEdit(null); };
 
-  const sorted = [...list].sort((a, b) => (a.startDate || "9").localeCompare(b.startDate || "9"));
-  const bookable = trip.todos.filter((x) => BOOKABLE_CATEGORIES.includes(x.cat));
+  const sorted = [...list].sort((a, b) => (a.startDate || "9999-99-99").localeCompare(b.startDate || "9999-99-99"));
+  const bookable = [...trip.todos].filter((x) => BOOKABLE_CATEGORIES.includes(x.cat))
+    .sort((a, b) => (a.due || "9999-99-99").localeCompare(b.due || "9999-99-99"));
   const openCount = bookable.filter((x) => !list.some((r) => reservationTodoIds(r).includes(x.id))).length;
 
   const addForTodo = (x) => setEdit({ ...blankReservation(), type: CAT_TO_RES_TYPE[x.cat] || "Other", title: x.title, todoIds: [x.id] });
+
+  const bookableGroups = groupConsecutiveByKey(bookable, (x) => x.due || "");
+  const reservationGroups = groupConsecutiveByKey(sorted, (r) => r.startDate || "");
 
   return (
     <div className="space-y-4">
@@ -1155,11 +1159,14 @@ function Reservations({ t, trip, updateTrip, canEdit, focusReservationId, setFoc
           <div style={{ fontSize: 12.5, fontWeight: 700, color: t.sub, marginBottom: 6 }}>
             Needs a booking {openCount > 0 ? `(${openCount} open)` : "— all set"}
           </div>
-          <div className="space-y-2">
-            {bookable.map((x) => (
-              <BookingRow key={x.id} x={x} t={t} canEdit={canEdit} reservations={list} onAdd={() => addForTodo(x)} onEditReservation={setEdit} />
-            ))}
-          </div>
+          {bookableGroups.map((group, gi) => (
+            <div key={gi} className="space-y-2 mb-3">
+              <DateGroupHeader t={t} dateKey={group.key} fallback="No due date" />
+              {group.items.map((x) => (
+                <BookingRow key={x.id} x={x} t={t} canEdit={canEdit} reservations={list} onAdd={() => addForTodo(x)} onEditReservation={setEdit} />
+              ))}
+            </div>
+          ))}
         </div>
       )}
 
@@ -1173,16 +1180,39 @@ function Reservations({ t, trip, updateTrip, canEdit, focusReservationId, setFoc
             </div>
           </Card>
         ) : (
-          <div className="space-y-2">
-            {sorted.map((r) => (
-              <ReservationRow key={r.id} r={r} t={t} trip={trip} onEdit={canEdit ? () => setEdit(r) : undefined} />
-            ))}
-          </div>
+          reservationGroups.map((group, gi) => (
+            <div key={gi} className="space-y-2 mb-3">
+              <DateGroupHeader t={t} dateKey={group.key} fallback="No date set" day={trip.days.find((d) => d.date === group.key)} />
+              {group.items.map((r) => (
+                <ReservationRow key={r.id} r={r} t={t} trip={trip} onEdit={canEdit ? () => setEdit(r) : undefined} />
+              ))}
+            </div>
+          ))
         )}
       </div>
 
       <ReservationEditModal reservation={edit} onClose={() => setEdit(null)} onSave={save} onDelete={del} t={t} trip={trip} />
     </div>
+  );
+}
+
+// Groups a pre-sorted array into consecutive runs sharing the same key --
+// used to put a date header above each cluster of same-date rows.
+function groupConsecutiveByKey(items, keyFn) {
+  const groups = [];
+  for (const item of items) {
+    const key = keyFn(item);
+    const last = groups[groups.length - 1];
+    if (last && last.key === key) last.items.push(item);
+    else groups.push({ key, items: [item] });
+  }
+  return groups;
+}
+
+function DateGroupHeader({ t, dateKey, fallback, day }) {
+  const label = !dateKey ? fallback : day ? `Day ${day.n} · ${fmtLong(dateKey)}` : fmtLong(dateKey);
+  return (
+    <div style={{ fontSize: 11.5, fontWeight: 700, color: t.primary, marginTop: 4, marginBottom: 2 }}>{label}</div>
   );
 }
 
