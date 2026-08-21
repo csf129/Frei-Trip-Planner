@@ -81,7 +81,9 @@ async function callAnthropic(apiKey: string, base64: string, mediaType: string) 
     },
     body: JSON.stringify({
       model: "claude-sonnet-5",
-      max_tokens: 1024,
+      // 1024 was tight once adaptive thinking (on by default for Sonnet 5)
+      // started eating into the same budget as the actual answer.
+      max_tokens: 4096,
       system: SYSTEM_PROMPT,
       messages: [{
         role: "user",
@@ -94,7 +96,12 @@ async function callAnthropic(apiKey: string, base64: string, mediaType: string) 
   });
   if (!res.ok) throw new Error(`Anthropic API error (${res.status}): ${await res.text()}`);
   const data = await res.json();
-  return parseModelJson(data.content[0].text);
+  // Adaptive thinking can prepend a `thinking` block before the actual
+  // answer, so the text response isn't reliably content[0] anymore -- find
+  // the first real text block instead of assuming its position.
+  const textBlock = data.content?.find((b: any) => b.type === "text");
+  if (!textBlock) throw new Error(`No text response from Anthropic (stop_reason: ${data.stop_reason})`);
+  return parseModelJson(textBlock.text);
 }
 
 async function callOpenAI(apiKey: string, base64: string, mediaType: string) {
