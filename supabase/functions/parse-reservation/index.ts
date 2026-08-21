@@ -40,9 +40,11 @@ Respond with ONLY a single JSON object, no markdown fences, no commentary, match
   "endDate": string,
   "startTime": string,
   "endTime": string,
+  "cost": string,
+  "paymentDue": string,
   "notes": string
 }
-Dates must be YYYY-MM-DD, times HH:MM 24h. Use "" for any field you can't find. Never invent information that isn't in the image.`;
+"cost" is the total price of the booking (numbers only, no currency symbol, e.g. "604.79"). "paymentDue" is the date any remaining balance is due (YYYY-MM-DD) -- if the confirmation shows "Balance Due $0.00" or "Paid in full", leave paymentDue as "". Other dates must be YYYY-MM-DD, times HH:MM 24h. Use "" for any field you can't find. Never invent information that isn't in the image.`;
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {

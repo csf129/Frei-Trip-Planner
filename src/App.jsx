@@ -1135,11 +1135,13 @@ const reservationTodoIds = (r) => r.todoIds || (r.todoId ? [r.todoId] : []);
 const blankReservation = () => ({
   type: "Hotel", title: "", host: "", location: "", confirmationNumber: "",
   startDate: "", endDate: "", startTime: "", endTime: "", dayIds: [], todoIds: [], notes: "", filePath: null,
+  cost: "", paymentDue: "", category: "",
 });
 
-function Reservations({ t, trip, updateTrip, canEdit, focusReservationId, setFocusReservationId }) {
+function Reservations({ t, trip, updateTrip, canEdit, focusReservationId, setFocusReservationId, state }) {
   const [edit, setEdit] = useState(null);
   const list = trip?.reservations || [];
+  const cur = state.settings.currency;
 
   useEffect(() => {
     if (!focusReservationId) return;
@@ -1181,7 +1183,7 @@ function Reservations({ t, trip, updateTrip, canEdit, focusReservationId, setFoc
             <div key={gi} className="space-y-2 mb-3">
               <DateGroupHeader t={t} dateKey={group.key} fallback="No specific day" day={trip.days.find((d) => d.date === group.key)} />
               {group.items.map((x) => (
-                <BookingRow key={x.id} x={x} t={t} canEdit={canEdit} reservations={list} onAdd={() => addForTodo(x)} onEditReservation={setEdit} />
+                <BookingRow key={x.id} x={x} t={t} cur={cur} canEdit={canEdit} reservations={list} onAdd={() => addForTodo(x)} onEditReservation={setEdit} />
               ))}
             </div>
           ))}
@@ -1202,7 +1204,7 @@ function Reservations({ t, trip, updateTrip, canEdit, focusReservationId, setFoc
             <div key={gi} className="space-y-2 mb-3">
               <DateGroupHeader t={t} dateKey={group.key} fallback="No date set" day={trip.days.find((d) => d.date === group.key)} />
               {group.items.map((r) => (
-                <ReservationRow key={r.id} r={r} t={t} trip={trip} onEdit={canEdit ? () => setEdit(r) : undefined} />
+                <ReservationRow key={r.id} r={r} t={t} cur={cur} trip={trip} onEdit={canEdit ? () => setEdit(r) : undefined} />
               ))}
             </div>
           ))
@@ -1242,10 +1244,12 @@ function DateGroupHeader({ t, dateKey, fallback, day }) {
   );
 }
 
-function BookingRow({ x, t, canEdit, reservations, onAdd, onEditReservation }) {
+function BookingRow({ x, t, cur, canEdit, reservations, onAdd, onEditReservation }) {
   const Icon = CAT_ICON[x.cat] || Circle;
   const linked = reservations.filter((r) => reservationTodoIds(r).includes(x.id));
   const booked = linked.length > 0;
+  const cost = linked.reduce((s, r) => s + (+r.cost || 0), 0);
+  const nextDue = linked.map((r) => r.paymentDue).filter(Boolean).sort()[0];
   return (
     <Card t={t} style={{ padding: 0 }}>
       <div className="flex items-center gap-3 px-3.5 py-3">
@@ -1256,6 +1260,12 @@ function BookingRow({ x, t, canEdit, reservations, onAdd, onEditReservation }) {
           <div className="truncate" style={{ fontSize: 13.5, fontWeight: 600, color: t.ink }}>{x.title}</div>
           <div style={{ fontSize: 11, color: t.sub, marginTop: 1 }}>{x.cat}{x.due ? ` · due ${fmtShort(x.due)}` : ""}</div>
         </div>
+        {booked && (cost > 0 || nextDue) && (
+          <div className="text-right flex-shrink-0" style={{ marginRight: 4 }}>
+            {cost > 0 && <div style={{ fontSize: 13, fontWeight: 700, color: t.ink }}>{money(cost, cur)}</div>}
+            {nextDue && <div style={{ fontSize: 10.5, color: t.sub }}>due {fmtShort(nextDue)}</div>}
+          </div>
+        )}
         {booked ? (
           <button onClick={() => onEditReservation(linked[0])} className="flex items-center gap-1 rounded-full px-2.5 py-1 flex-shrink-0"
             style={{ fontSize: 11.5, fontWeight: 700, color: t.primaryDark, background: t.primarySoft }}>
@@ -1279,7 +1289,7 @@ function dayRangeLabel(dayNumbers) {
   return contiguous ? `Days ${ns[0]}–${ns[ns.length - 1]}` : `Days ${ns.join(", ")}`;
 }
 
-function ReservationRow({ r, t, trip, onEdit }) {
+function ReservationRow({ r, t, cur, trip, onEdit }) {
   const Icon = RES_TYPE_ICON[r.type] || FileText;
   const days = reservationDayIds(r).map((id) => trip.days.find((d) => d.id === id)).filter(Boolean);
   const dayLabel = dayRangeLabel(days.map((d) => d.n));
@@ -1313,6 +1323,12 @@ function ReservationRow({ r, t, trip, onEdit }) {
             )}
           </div>
         </div>
+        {(+r.cost > 0 || r.paymentDue) && (
+          <div className="text-right flex-shrink-0">
+            {+r.cost > 0 && <div style={{ fontSize: 14.5, fontWeight: 700, color: t.ink, fontFamily: "Georgia, serif" }}>{money(r.cost, cur)}</div>}
+            {r.paymentDue && <div style={{ fontSize: 10.5, color: t.sub, marginTop: 1 }}>due {fmtShort(r.paymentDue)}</div>}
+          </div>
+        )}
         {onEdit && <Pencil size={15} color={t.sub} style={{ flexShrink: 0 }} />}
       </div>
     </Card>
@@ -1400,6 +1416,16 @@ function ReservationEditModal({ reservation, onClose, onSave, onDelete, t, trip 
       </div>
       <Field label="Confirmation number" t={t}><input style={inputStyle(t)} value={r.confirmationNumber} onChange={(e) => setR({ ...r, confirmationNumber: e.target.value })} /></Field>
       <div className="grid grid-cols-2 gap-3">
+        <Field label="Cost" t={t}><input inputMode="decimal" style={inputStyle(t)} value={r.cost || ""} onChange={(e) => setR({ ...r, cost: e.target.value.replace(/[^0-9.]/g, "") })} placeholder="0.00" /></Field>
+        <Field label="Payment due" t={t}><input type="date" style={inputStyle(t)} value={r.paymentDue || ""} onChange={(e) => setR({ ...r, paymentDue: e.target.value })} /></Field>
+      </div>
+      <Field label="Budget category (optional — feeds the Budget tab's actual-vs-estimate tally)" t={t}>
+        <select style={inputStyle(t)} value={r.category || ""} onChange={(e) => setR({ ...r, category: e.target.value })}>
+          <option value="">—</option>
+          {trip.budget.categories.map((c) => <option key={c.id} value={c.name}>{c.name}</option>)}
+        </select>
+      </Field>
+      <div className="grid grid-cols-2 gap-3">
         <Field label="Start date" t={t}><input type="date" style={inputStyle(t)} value={r.startDate} onChange={(e) => setR({ ...r, startDate: e.target.value })} /></Field>
         <Field label="End date" t={t}><input type="date" style={inputStyle(t)} value={r.endDate} onChange={(e) => setR({ ...r, endDate: e.target.value })} /></Field>
       </div>
@@ -1458,17 +1484,23 @@ function Budget({ t, trip, updateTrip, state, canEdit }) {
   if (!trip) return null;
   const b = trip.budget;
   const cur = state.settings.currency;
+  const reservations = trip.reservations || [];
   const est = b.categories.reduce((s, c) => s + (+c.est || 0), 0);
   const spent = b.expenses.reduce((s, e) => s + (+e.amount || 0), 0);
+  const reserved = reservations.reduce((s, r) => s + (+r.cost || 0), 0);
+  const actual = spent + reserved;
 
   const setBudget = (patch) => updateTrip({ budget: { ...b, ...patch } });
   const addExpense = (e) => { setBudget({ expenses: [{ ...e, id: uid() }, ...b.expenses] }); setAddExp(false); };
   const delExpense = (id) => setBudget({ expenses: b.expenses.filter((x) => x.id !== id) });
   const setEst = (id, v) => setBudget({ categories: b.categories.map((c) => c.id === id ? { ...c, est: v } : c) });
 
-  // spent per category
+  // actual per category = manually logged expenses + reservation costs
+  // tagged with that category (a reservation left uncategorized still
+  // counts toward the overall total above, just not any one category row)
   const byCat = {};
   b.expenses.forEach((e) => { byCat[e.category] = (byCat[e.category] || 0) + (+e.amount || 0); });
+  reservations.forEach((r) => { if (r.category) byCat[r.category] = (byCat[r.category] || 0) + (+r.cost || 0); });
   const pieData = b.categories.filter((c) => (+c.est || 0) > 0).map((c) => ({ name: c.name, value: +c.est }));
   const PIE = [t.primary, t.accent, t.clay, t.water, "#8A8672", t.primaryDark, "#C9A66B"];
 
@@ -1489,7 +1521,7 @@ function Budget({ t, trip, updateTrip, state, canEdit }) {
         </div>
         <div className="grid grid-cols-3 divide-x" style={{ borderColor: t.line }}>
           <Stat t={t} label="Estimated cost" value={money(est, cur)} sub="all categories" />
-          <Stat t={t} label="Logged so far" value={money(spent, cur)} sub={`${est ? Math.round(spent / est * 100) : 0}% of est.`} />
+          <Stat t={t} label="Actual so far" value={money(actual, cur)} sub={`${est ? Math.round(actual / est * 100) : 0}% of est. · ${money(reserved, cur)} reserved`} />
           <Stat t={t} label="Still to save" value={money(Math.max(0, b.savingsGoal - b.saved), cur)} sub="to hit goal" />
         </div>
       </Card>
@@ -1516,6 +1548,9 @@ function Budget({ t, trip, updateTrip, state, canEdit }) {
               <div key={c.id} className="flex items-center gap-2">
                 <span style={{ width: 9, height: 9, borderRadius: 2, background: PIE[i % PIE.length] }} />
                 <span className="flex-1" style={{ fontSize: 12.5, color: t.ink }}>{c.name}</span>
+                {byCat[c.name] > 0 && (
+                  <span style={{ fontSize: 11, color: byCat[c.name] > (+c.est || 0) ? t.danger : t.sub }}>{money(byCat[c.name], cur)} actual</span>
+                )}
                 <input value={c.est} disabled={!canEdit} onChange={(e) => setEst(c.id, e.target.value.replace(/[^0-9.]/g, ""))}
                   style={{ width: 66, textAlign: "right", padding: "3px 6px", borderRadius: 8, border: `1px solid ${t.line}`, fontSize: 12.5, color: t.ink, background: t.paper2 }} />
               </div>
@@ -1523,8 +1558,14 @@ function Budget({ t, trip, updateTrip, state, canEdit }) {
           </div>
         </div>
         <div className="flex items-center justify-between px-4 py-3" style={{ borderTop: `1px solid ${t.line}` }}>
-          <span style={{ fontSize: 13, fontWeight: 700, color: t.ink }}>Total estimate</span>
-          <span style={{ fontSize: 16, fontWeight: 700, color: t.primary, fontFamily: "Georgia, serif" }}>{money(est, cur)}</span>
+          <div>
+            <div style={{ fontSize: 10.5, color: t.sub, fontWeight: 600 }}>Total estimate</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: t.ink, fontFamily: "Georgia, serif" }}>{money(est, cur)}</div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: 10.5, color: t.sub, fontWeight: 600 }}>Total actual</div>
+            <div style={{ fontSize: 16, fontWeight: 700, color: actual > est ? t.danger : t.primary, fontFamily: "Georgia, serif" }}>{money(actual, cur)}</div>
+          </div>
         </div>
       </Card>
 
