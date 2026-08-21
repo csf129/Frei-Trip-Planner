@@ -143,9 +143,10 @@ const TOOLS = [
       properties: {
         title: { type: "string" },
         cat: { type: "string", description: "Category, e.g. Ferries, Lodging, Tours, Documents, Vehicle, Health, Packing, Money, Planning" },
-        due: { type: "string", description: "YYYY-MM-DD or empty" },
+        due: { type: "string", description: "YYYY-MM-DD or empty -- this is the deadline to book/do it by, NOT the trip date it's for" },
         pri: { type: "string", enum: ["very-high", "high", "medium", "low"] },
         notes: { type: "string" },
+        dayIds: { type: "array", items: { type: "string" }, description: "For Ferries/Lodging/Tours items only: the id(s) of the itinerary day(s) this booking is actually FOR (e.g. the ferry's departure day, every night of a multi-night stay). This is what the Reservations tab sorts by -- distinct from `due`, which is just the booking deadline. Omit for non-bookable categories." },
       },
       required: ["title", "cat"],
     },
@@ -163,6 +164,7 @@ const TOOLS = [
         pri: { type: "string", enum: ["very-high", "high", "medium", "low"] },
         notes: { type: "string" },
         done: { type: "boolean" },
+        dayIds: { type: "array", items: { type: "string" }, description: "Full replacement list of itinerary day id(s) this booking is FOR (not the due-date deadline) -- update this if the day(s) the item pertains to changes." },
       },
       required: ["todoId"],
     },
@@ -256,6 +258,8 @@ function systemPrompt(trip: unknown) {
 SCHEDULE CHANGES -- prefer the cheap structural tools: for anything about WHEN or in what ORDER days happen -- a delay, an early start, swapping days, inserting or removing a day -- always use shift_days / reorder_days / insert_day / remove_day instead of calling update_day on every affected day. These do the date/renumbering math for you in one call, whereas rewriting each day's full content via update_day is slow and expensive. Example: "the ferry only runs Wednesdays, push everything from Day 6 on by 2 days" is exactly one shift_days call, not six update_day calls. Only reach for update_day when a day's actual content (title, plan steps, overnight, hike, etc) needs to change, not just its date or position. shift_days and reorder_days move whole days as-is, so a day's map stops travel with it automatically -- you don't need to touch them for a pure schedule change.
 
 MAP STOPS -- each day's real-world locations for its map live on the day itself (the 'stops' field), not somewhere else, so they only go stale if you forget to update them. Whenever update_day changes where a day actually goes (overnight, an added/removed stop, a rerouted drive) or insert_day creates a new day, include a full replacement 'stops' array with your best-effort real coordinates for every place visited that day, in order -- flag a stop's ferry:true if the leg to the next stop is a boat crossing, not a road. If a day's locations aren't changing, omit 'stops' entirely and leave it as-is.
+
+CHECKLIST ITEM DATES -- a Ferries/Lodging/Tours checklist item has two different dates: 'due' (the deadline to book it by) and 'dayIds' (which itinerary day(s) it's actually FOR, e.g. the ferry's departure day, every night of a multi-night stay). The Reservations tab sorts "Needs a booking" by dayIds, not due -- always set dayIds on add_todo/update_todo for bookable items when you know which day(s) they're for, even if you also set a due date.
 
 IMPORTANT -- pace yourself on big requests: the server that runs you has its own time limit per reply, separate from your token budget, and a reply that tries to do too much can be cut off with nothing delivered at all. If a request would still mean touching more than about 4-5 days/items with update_day in one go (i.e. real content changes, not just schedule shifts, which the structural tools above already handle cheaply), don't attempt it all in one reply -- propose the first 4-5, briefly say what's left, and let the conversation continue.
 

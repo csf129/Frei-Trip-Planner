@@ -1039,7 +1039,7 @@ function Todos({ t, trip, updateTrip, state, canEdit }) {
         </div>
       )}
 
-      <TodoEditModal todo={edit} onClose={() => setEdit(null)} onSave={save} onDelete={del} t={t} />
+      <TodoEditModal todo={edit} onClose={() => setEdit(null)} onSave={save} onDelete={del} t={t} trip={trip} />
     </div>
   );
 }
@@ -1069,11 +1069,12 @@ function TodoRow({ x, t, onToggle, onEdit, canEdit, reserved }) {
   );
 }
 
-function TodoEditModal({ todo, onClose, onSave, onDelete, t }) {
+function TodoEditModal({ todo, onClose, onSave, onDelete, t, trip }) {
   const [x, setX] = useState(todo);
   useEffect(() => setX(todo), [todo]);
   if (!todo) return null;
   const cats = ["Ferries", "Lodging", "Tours", "Documents", "Vehicle", "Health", "Packing", "Money", "Planning"];
+  const isBookable = BOOKABLE_CATEGORIES.includes(x.cat);
   return (
     <Modal open={!!todo} onClose={onClose} title={todo.id ? "Edit item" : "New checklist item"} t={t}>
       <Field label="What needs doing?" t={t}><input style={inputStyle(t)} value={x.title} onChange={(e) => setX({ ...x, title: e.target.value })} placeholder="e.g. Book the ferry" /></Field>
@@ -1089,7 +1090,24 @@ function TodoEditModal({ todo, onClose, onSave, onDelete, t }) {
           </select>
         </Field>
       </div>
-      <Field label="Due date" t={t}><input type="date" style={inputStyle(t)} value={x.due || ""} onChange={(e) => setX({ ...x, due: e.target.value })} /></Field>
+      <Field label="Due date (when this needs to be booked by)" t={t}><input type="date" style={inputStyle(t)} value={x.due || ""} onChange={(e) => setX({ ...x, due: e.target.value })} /></Field>
+      {isBookable && trip && (
+        <Field label="Trip day(s) this is for (optional — used to sort the Reservations tab)" t={t}>
+          <div className="flex flex-wrap gap-1.5 p-2 rounded-xl" style={{ border: `1px solid ${t.line}`, maxHeight: 140, overflowY: "auto" }}>
+            {trip.days.map((d) => {
+              const on = (x.dayIds || []).includes(d.id);
+              return (
+                <button key={d.id} type="button"
+                  onClick={() => setX({ ...x, dayIds: on ? x.dayIds.filter((id) => id !== d.id) : [...(x.dayIds || []), d.id] })}
+                  className="rounded-full px-2.5 py-1" title={`${fmtShort(d.date)} · ${d.overnight}`}
+                  style={{ fontSize: 11.5, fontWeight: 600, background: on ? t.primary : t.paper2, color: on ? "#fff" : t.sub, border: `1px solid ${on ? t.primary : t.line}` }}>
+                  Day {d.n}
+                </button>
+              );
+            })}
+          </div>
+        </Field>
+      )}
       <Field label="Notes" t={t}><textarea style={{ ...inputStyle(t), minHeight: 70, resize: "vertical" }} value={x.notes || ""} onChange={(e) => setX({ ...x, notes: e.target.value })} /></Field>
       <div className="flex justify-between items-center mt-2">
         {todo.id ? <Btn t={t} kind="danger" small onClick={() => onDelete(todo.id)}><Trash2 size={14} /> Delete</Btn> : <span />}
@@ -1141,12 +1159,12 @@ function Reservations({ t, trip, updateTrip, canEdit, focusReservationId, setFoc
 
   const sorted = [...list].sort((a, b) => (a.startDate || "9999-99-99").localeCompare(b.startDate || "9999-99-99"));
   const bookable = [...trip.todos].filter((x) => BOOKABLE_CATEGORIES.includes(x.cat))
-    .sort((a, b) => (a.due || "9999-99-99").localeCompare(b.due || "9999-99-99"));
+    .sort((a, b) => (todoForDate(a, trip) || "9999-99-99").localeCompare(todoForDate(b, trip) || "9999-99-99"));
   const openCount = bookable.filter((x) => !list.some((r) => reservationTodoIds(r).includes(x.id))).length;
 
   const addForTodo = (x) => setEdit({ ...blankReservation(), type: CAT_TO_RES_TYPE[x.cat] || "Other", title: x.title, todoIds: [x.id] });
 
-  const bookableGroups = groupConsecutiveByKey(bookable, (x) => x.due || "");
+  const bookableGroups = groupConsecutiveByKey(bookable, (x) => todoForDate(x, trip));
   const reservationGroups = groupConsecutiveByKey(sorted, (r) => r.startDate || "");
 
   return (
@@ -1161,7 +1179,7 @@ function Reservations({ t, trip, updateTrip, canEdit, focusReservationId, setFoc
           </div>
           {bookableGroups.map((group, gi) => (
             <div key={gi} className="space-y-2 mb-3">
-              <DateGroupHeader t={t} dateKey={group.key} fallback="No due date" />
+              <DateGroupHeader t={t} dateKey={group.key} fallback="No specific day" day={trip.days.find((d) => d.date === group.key)} />
               {group.items.map((x) => (
                 <BookingRow key={x.id} x={x} t={t} canEdit={canEdit} reservations={list} onAdd={() => addForTodo(x)} onEditReservation={setEdit} />
               ))}
@@ -1209,10 +1227,18 @@ function groupConsecutiveByKey(items, keyFn) {
   return groups;
 }
 
+// The trip date a checklist item is FOR (earliest linked day), distinct
+// from `due` (the deadline to book it by) -- used to sort/group "Needs a
+// booking" by when the thing actually happens, not when it must be booked.
+function todoForDate(x, trip) {
+  const dates = (x.dayIds || []).map((id) => trip.days.find((d) => d.id === id)?.date).filter(Boolean);
+  return dates.length ? dates.sort()[0] : "";
+}
+
 function DateGroupHeader({ t, dateKey, fallback, day }) {
   const label = !dateKey ? fallback : day ? `Day ${day.n} · ${fmtLong(dateKey)}` : fmtLong(dateKey);
   return (
-    <div style={{ fontSize: 11.5, fontWeight: 700, color: t.primary, marginTop: 4, marginBottom: 2 }}>{label}</div>
+    <div style={{ fontFamily: "Georgia, serif", fontSize: 17, fontWeight: 700, color: t.ink, marginTop: 10, marginBottom: 4 }}>{label}</div>
   );
 }
 
