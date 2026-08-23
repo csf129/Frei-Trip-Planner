@@ -10,3 +10,36 @@ body { margin: 0; }
 .quill-wrap .ql-toolbar.ql-snow { border-radius: 14px 14px 0 0; border-color: #d9d1bc; }
 .quill-wrap .ql-container.ql-snow { border-radius: 0 0 14px 14px; border-color: #d9d1bc; font-family: inherit; font-size: 13.5px; }
 .quill-wrap .ql-editor { min-height: 140px; }
+
+/* Read-only rendering of Quill-authored content. Deliberately NOT reusing
+   Quill's own .ql-editor class: that carries height:100% (which blows the
+   box out to the full column on a stretched flex child, overlapping the
+   surrounding sections) and hides list markers, because Quill draws its
+   bullets from .ql-ui spans that only exist inside the live editor and
+   aren't part of the saved HTML. */
+.rich-content { line-height: 1.45; }
+.rich-content > *:first-child { margin-top: 0; }
+.rich-content > *:last-child { margin-bottom: 0; }
+.rich-content p { margin: 0 0 5px; }
+/* Tailwind's preflight strips list markers from every ul/ol, so they have
+   to be put back explicitly here. */
+.rich-content ul, .rich-content ol { margin: 0; padding-left: 1.4em; }
+.rich-content ul { list-style-type: disc; }
+.rich-content ol { list-style-type: decimal; }
+.rich-content ul ul { list-style-type: circle; }
+.rich-content li { margin-bottom: 4px; }
+.rich-content li::marker { color: inherit; }
+/* Checkbox list items carry data-list instead of a normal marker. */
+.rich-content li[data-list="checked"],
+.rich-content li[data-list="unchecked"] { list-style: none; }
+.rich-content li[data-list="checked"]::before,
+.rich-content li[data-list="unchecked"]::before {
+  display: inline-block; width: 1.2em; margin-left: -1.4em; margin-right: .2em; text-align: left;
+}
+.rich-content li[data-list="checked"]::before { content: "\2611"; }
+.rich-content li[data-list="unchecked"]::before { content: "\2610"; }
+.rich-content .ql-indent-1 { margin-left: 1.5em; }
+.rich-content .ql-indent-2 { margin-left: 3em; }
+.rich-content .ql-indent-3 { margin-left: 4.5em; }
+.rich-content .ql-indent-4 { margin-left: 6em; }
+.rich-content a, .linkified a { color: inherit; text-decoration: underline; overflow-wrap: anywhere; }

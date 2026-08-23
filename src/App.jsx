@@ -55,16 +55,20 @@ function linkifyToHtml(text) {
 function Linkified({ text, style, className, preLine }) {
   if (!text) return null;
   return (
-    <span className={className} style={preLine ? { whiteSpace: "pre-line", ...style } : style}
+    <span className={`linkified${className ? ` ${className}` : ""}`} style={preLine ? { whiteSpace: "pre-line", ...style } : style}
       dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(linkifyToHtml(text)) }} />
   );
 }
+// Quill's semantic-HTML export turns every space into a non-breaking one,
+// which stops the text wrapping at all on a narrow screen -- put real
+// spaces back so long plan lines still reflow on a phone.
+const normalizeQuillHtml = (html) => (html || "").replace(/\u00a0/g, " ").replace(/&nbsp;/gi, " ");
 // A day's `plan` is either the legacy string[] (one step per line, plain
 // text) or a Quill-authored HTML string once it's been edited in the rich
 // editor -- whichever it is, this normalizes to safe, linkified HTML for
 // display or for seeding the editor.
 function planToHtml(plan) {
-  if (typeof plan === "string") return plan;
+  if (typeof plan === "string") return normalizeQuillHtml(plan);
   if (Array.isArray(plan) && plan.length) return `<ul>${plan.map((s) => `<li>${linkifyToHtml(s)}</li>`).join("")}</ul>`;
   return "";
 }
@@ -890,7 +894,7 @@ function Itinerary({ t, trip, updateTrip, canEdit, setView, setFocusReservationI
                   })}
                 </div>
 
-                <RichText html={planToHtml(d.plan)} className="ql-editor mt-3" style={{ padding: 0, fontSize: 13.5, color: t.ink, lineHeight: 1.4 }} />
+                <RichText html={planToHtml(d.plan)} className="rich-content mt-3" style={{ fontSize: 13.5, color: t.ink }} />
 
                 {d.hike && (
                   <div className="mt-3 rounded-2xl px-3 py-2.5" style={{ background: t.primarySoft }}>
@@ -998,7 +1002,7 @@ function DayEditModal({ day, onClose, onSave, t }) {
       </Field>
       <div className="flex justify-end gap-2 mt-2">
         <Btn t={t} kind="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn t={t} onClick={() => onSave({ ...d, plan: sanitizeRichHtml(planHtml), restaurants: rst })}><Save size={15} /> Save day</Btn>
+        <Btn t={t} onClick={() => onSave({ ...d, plan: sanitizeRichHtml(normalizeQuillHtml(planHtml)), restaurants: rst })}><Save size={15} /> Save day</Btn>
       </div>
     </Modal>
   );
