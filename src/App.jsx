@@ -7,7 +7,7 @@ import {
   ChevronLeft, ChevronRight, Circle, CheckCircle2, PiggyBank,
   DollarSign, Clock, Luggage, Camera, Flag, Info, Heart,
   Save, ListChecks, LayoutDashboard, ChevronDown, Ticket, Upload, Loader2, Plane,
-  Sparkles, Send, Check, ImagePlus, CreditCard,
+  Sparkles, Send, Check, ImagePlus, CreditCard, Coffee, Utensils, UtensilsCrossed,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RTooltip } from "recharts";
 import { MapContainer, TileLayer, Marker, Tooltip as LeafletTooltip, Polyline } from "react-leaflet";
@@ -15,10 +15,75 @@ import L from "leaflet";
 import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
 import markerIcon from "leaflet/dist/images/marker-icon.png";
 import markerShadow from "leaflet/dist/images/marker-shadow.png";
+import ReactQuill from "react-quill-new";
+import "react-quill-new/dist/quill.snow.css";
+import DOMPurify from "dompurify";
 import { supabase } from "./lib/supabaseClient";
 
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({ iconRetinaUrl: markerIcon2x, iconUrl: markerIcon, shadowUrl: markerShadow });
+
+// Quill's own HTML export has a known XSS gap (GHSA-v3m3-f69x-jf25, no
+// patched release yet) and this content is rendered to anonymous viewers
+// via the public share link, so nothing produced by Quill -- or typed
+// into any other free-text field -- is trusted directly. Everything goes
+// through DOMPurify before it's ever used in dangerouslySetInnerHTML,
+// both when it's saved and again when it's displayed.
+DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  if (node.tagName === "A") {
+    node.setAttribute("target", "_blank");
+    node.setAttribute("rel", "noopener noreferrer");
+  }
+});
+const sanitizeRichHtml = (html) => DOMPurify.sanitize(html || "");
+
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+const URL_RE = /(https?:\/\/[^\s<>"']+)/gi;
+// Escapes plain text, then wraps bare URLs with real anchors -- safe to
+// hand to dangerouslySetInnerHTML since escaping happens before any HTML
+// is introduced, and the only tags this ever produces are the <a> ones
+// it builds itself.
+function linkifyToHtml(text) {
+  if (!text) return "";
+  return escapeHtml(text).replace(URL_RE, (url) => {
+    const real = url.replace(/&amp;/g, "&");
+    return `<a href="${escapeHtml(real)}">${url}</a>`;
+  });
+}
+function Linkified({ text, style, className, preLine }) {
+  if (!text) return null;
+  return (
+    <span className={className} style={preLine ? { whiteSpace: "pre-line", ...style } : style}
+      dangerouslySetInnerHTML={{ __html: sanitizeRichHtml(linkifyToHtml(text)) }} />
+  );
+}
+// A day's `plan` is either the legacy string[] (one step per line, plain
+// text) or a Quill-authored HTML string once it's been edited in the rich
+// editor -- whichever it is, this normalizes to safe, linkified HTML for
+// display or for seeding the editor.
+function planToHtml(plan) {
+  if (typeof plan === "string") return plan;
+  if (Array.isArray(plan) && plan.length) return `<ul>${plan.map((s) => `<li>${linkifyToHtml(s)}</li>`).join("")}</ul>`;
+  return "";
+}
+function planPreviewText(plan) {
+  if (Array.isArray(plan)) return plan[0] || "";
+  if (typeof plan === "string") {
+    const div = document.createElement("div");
+    div.innerHTML = plan;
+    return (div.textContent || "").trim().split("\n")[0].slice(0, 140);
+  }
+  return "";
+}
+function RichText({ html, className, style }) {
+  const safe = sanitizeRichHtml(html);
+  if (!safe) return null;
+  return <div className={className} style={style} dangerouslySetInnerHTML={{ __html: safe }} />;
+}
+const blankRestaurants = () => ({ breakfast: "", lunch: "", dinner: "" });
+const restaurantsOf = (day) => day.restaurants || blankRestaurants();
 
 /* ------------------------------------------------------------------ */
 /*  THEME                                                              */
@@ -786,6 +851,8 @@ function Itinerary({ t, trip, updateTrip, canEdit, setView, setFocusReservationI
       <SectionHeader t={t} title={trip.name} sub={`${fmtLong(trip.startDate)} → ${fmtLong(trip.endDate)}`} />
       {trip.days.map((d) => {
         const dayReservations = (trip.reservations || []).filter((r) => reservationDayIds(r).includes(d.id));
+        const rst = restaurantsOf(d);
+        const hasRestaurants = rst.breakfast || rst.lunch || rst.dinner;
         return (
         <Card key={d.id} t={t}>
           <div className="px-4 pt-3.5 pb-3">
@@ -823,13 +890,7 @@ function Itinerary({ t, trip, updateTrip, canEdit, setView, setFocusReservationI
                   })}
                 </div>
 
-                <ul className="mt-3 space-y-1.5">
-                  {d.plan.map((p, i) => (
-                    <li key={i} className="flex gap-2" style={{ fontSize: 13.5, color: t.ink, lineHeight: 1.4 }}>
-                      <span style={{ color: t.primary, marginTop: 2 }}>•</span><span>{p}</span>
-                    </li>
-                  ))}
-                </ul>
+                <RichText html={planToHtml(d.plan)} className="ql-editor mt-3" style={{ padding: 0, fontSize: 13.5, color: t.ink, lineHeight: 1.4 }} />
 
                 {d.hike && (
                   <div className="mt-3 rounded-2xl px-3 py-2.5" style={{ background: t.primarySoft }}>
@@ -838,12 +899,35 @@ function Itinerary({ t, trip, updateTrip, canEdit, setView, setFocusReservationI
                       <span style={{ fontSize: 12.5, fontWeight: 700, color: t.primaryDark }}>{d.hike.name}</span>
                       <span className="ml-auto rounded-full px-2 py-0.5" style={{ fontSize: 10.5, fontWeight: 700, background: "#fff", color: t.primaryDark }}>{d.hike.diff}</span>
                     </div>
-                    <div style={{ fontSize: 12, color: t.primaryDark, marginTop: 4, lineHeight: 1.4, opacity: .92 }}>{d.hike.note}</div>
+                    <Linkified text={d.hike.note} preLine style={{ fontSize: 12, color: t.primaryDark, marginTop: 4, lineHeight: 1.4, opacity: .92, display: "block" }} />
+                  </div>
+                )}
+
+                {hasRestaurants && (
+                  <div className="mt-3 rounded-2xl px-3 py-2.5 space-y-1.5" style={{ background: t.paper2, border: `1px solid ${t.line}` }}>
+                    {rst.breakfast && (
+                      <div className="flex gap-2">
+                        <Coffee size={13} color={t.accent} style={{ flexShrink: 0, marginTop: 2 }} />
+                        <Linkified text={rst.breakfast} preLine style={{ fontSize: 12, color: t.ink, lineHeight: 1.4 }} />
+                      </div>
+                    )}
+                    {rst.lunch && (
+                      <div className="flex gap-2">
+                        <Utensils size={13} color={t.accent} style={{ flexShrink: 0, marginTop: 2 }} />
+                        <Linkified text={rst.lunch} preLine style={{ fontSize: 12, color: t.ink, lineHeight: 1.4 }} />
+                      </div>
+                    )}
+                    {rst.dinner && (
+                      <div className="flex gap-2">
+                        <UtensilsCrossed size={13} color={t.accent} style={{ flexShrink: 0, marginTop: 2 }} />
+                        <Linkified text={rst.dinner} preLine style={{ fontSize: 12, color: t.ink, lineHeight: 1.4 }} />
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
 
-              <DayMap t={t} stops={d.stops} planPreview={d.plan[0]} />
+              <DayMap t={t} stops={d.stops} planPreview={planPreviewText(d.plan)} />
             </div>
           </div>
         </Card>
@@ -864,11 +948,25 @@ function Chip({ t, icon, text, solid }) {
   );
 }
 
+const QUILL_MODULES = {
+  toolbar: [
+    ["bold", "italic", "strike"],
+    [{ color: [] }, { background: [] }],
+    ["link"],
+    [{ list: "bullet" }, { list: "check" }],
+    [{ indent: "-1" }, { indent: "+1" }],
+    ["clean"],
+  ],
+};
+const QUILL_FORMATS = ["bold", "italic", "strike", "color", "background", "link", "list", "indent"];
+
 function DayEditModal({ day, onClose, onSave, t }) {
   const [d, setD] = useState(day);
-  useEffect(() => setD(day), [day]);
+  const [planHtml, setPlanHtml] = useState("");
+  useEffect(() => { setD(day); setPlanHtml(planToHtml(day?.plan)); }, [day]);
   if (!day || !d) return null;
-  const setPlanItem = (i, v) => setD({ ...d, plan: d.plan.map((p, idx) => idx === i ? v : p) });
+  const rst = restaurantsOf(d);
+  const setRestaurant = (meal, v) => setD({ ...d, restaurants: { ...rst, [meal]: v } });
   return (
     <Modal open={!!day} onClose={onClose} title={`Edit Day ${d.n}`} t={t} wide>
       <Field label="Title" t={t}><input style={inputStyle(t)} value={d.title} onChange={(e) => setD({ ...d, title: e.target.value })} /></Field>
@@ -880,13 +978,27 @@ function DayEditModal({ day, onClose, onSave, t }) {
         <Field label="Date" t={t}><input type="date" style={inputStyle(t)} value={d.date} onChange={(e) => setD({ ...d, date: e.target.value })} /></Field>
         <Field label="Drive time" t={t}><input style={inputStyle(t)} value={d.drive || ""} onChange={(e) => setD({ ...d, drive: e.target.value })} /></Field>
       </div>
-      <Field label="Plan (one step per line)" t={t}>
-        <textarea style={{ ...inputStyle(t), minHeight: 120, resize: "vertical" }}
-          value={d.plan.join("\n")} onChange={(e) => setD({ ...d, plan: e.target.value.split("\n").filter((x) => x.trim() !== "" || true) })} />
+      <Field label="Plan" t={t}>
+        <div className="quill-wrap">
+          <ReactQuill theme="snow" value={planHtml} onChange={setPlanHtml} modules={QUILL_MODULES} formats={QUILL_FORMATS} />
+        </div>
+      </Field>
+      <div style={{ fontFamily: "Georgia, serif", fontSize: 15, color: t.ink, marginTop: 14, marginBottom: 6 }}>Restaurant options</div>
+      <Field label="Breakfast / coffee" t={t}>
+        <textarea style={{ ...inputStyle(t), minHeight: 54, resize: "vertical" }} value={rst.breakfast} placeholder="One option per line — names, links, notes"
+          onChange={(e) => setRestaurant("breakfast", e.target.value)} />
+      </Field>
+      <Field label="Lunch" t={t}>
+        <textarea style={{ ...inputStyle(t), minHeight: 54, resize: "vertical" }} value={rst.lunch} placeholder="One option per line — names, links, notes"
+          onChange={(e) => setRestaurant("lunch", e.target.value)} />
+      </Field>
+      <Field label="Dinner" t={t}>
+        <textarea style={{ ...inputStyle(t), minHeight: 54, resize: "vertical" }} value={rst.dinner} placeholder="One option per line — names, links, notes"
+          onChange={(e) => setRestaurant("dinner", e.target.value)} />
       </Field>
       <div className="flex justify-end gap-2 mt-2">
         <Btn t={t} kind="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn t={t} onClick={() => onSave({ ...d, plan: d.plan.filter((p) => p.trim() !== "") })}><Save size={15} /> Save day</Btn>
+        <Btn t={t} onClick={() => onSave({ ...d, plan: sanitizeRichHtml(planHtml), restaurants: rst })}><Save size={15} /> Save day</Btn>
       </div>
     </Modal>
   );
@@ -1055,7 +1167,7 @@ function TodoRow({ x, t, onToggle, onEdit, canEdit, reserved }) {
         </button>
         <div className="flex-1 min-w-0" onClick={canEdit ? () => onEdit(x) : undefined} style={{ cursor: canEdit ? "pointer" : "default" }}>
           <div style={{ fontSize: 14, fontWeight: 600, color: x.done ? t.sub : t.ink, textDecoration: x.done ? "line-through" : "none", lineHeight: 1.3 }}>{x.title}</div>
-          {x.notes && <div className="truncate" style={{ fontSize: 12, color: t.sub, marginTop: 2 }}>{x.notes}</div>}
+          {x.notes && <Linkified text={x.notes} className="truncate" style={{ fontSize: 12, color: t.sub, marginTop: 2, display: "block" }} />}
           <div className="flex items-center gap-2 mt-1.5 flex-wrap">
             <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5" style={{ fontSize: 10.5, fontWeight: 600, background: t.primarySoft, color: t.primaryDark }}><Icon size={11} /> {x.cat}</span>
             {x.due && <span style={{ fontSize: 11, fontWeight: 600, color: overdue ? t.danger : t.sub }}>{overdue ? "⚠ " : ""}{fmtShort(x.due)}</span>}

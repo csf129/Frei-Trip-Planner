@@ -4,3 +4,9 @@
 
 html, body, #root { height: 100%; }
 body { margin: 0; }
+
+/* Rich-text plan editor -- kept close to Quill's own Snow theme rather
+   than reskinned per-app-theme, since it's a self-contained widget. */
+.quill-wrap .ql-toolbar.ql-snow { border-radius: 14px 14px 0 0; border-color: #d9d1bc; }
+.quill-wrap .ql-container.ql-snow { border-radius: 0 0 14px 14px; border-color: #d9d1bc; font-family: inherit; font-size: 13.5px; }
+.quill-wrap .ql-editor { min-height: 140px; }

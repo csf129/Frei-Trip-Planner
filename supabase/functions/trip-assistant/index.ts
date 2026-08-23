@@ -64,6 +64,15 @@ const TOOLS = [
             required: ["name", "lat", "lng"],
           },
         },
+        restaurants: {
+          type: "object",
+          description: "Full replacement of this day's restaurant option notes, by meal -- like the other fields here, this replaces the whole object, so include every meal you want kept (not just the one changing), each as freeform text with multiple options on separate lines.",
+          properties: {
+            breakfast: { type: "string" },
+            lunch: { type: "string" },
+            dinner: { type: "string" },
+          },
+        },
       },
       required: ["dayId"],
     },
@@ -120,6 +129,15 @@ const TOOLS = [
               ferry: { type: "boolean", description: "true if the leg from this stop to the next one is a ferry/boat crossing, not a road" },
             },
             required: ["name", "lat", "lng"],
+          },
+        },
+        restaurants: {
+          type: "object",
+          description: "Restaurant option notes for this new day, by meal. Each is freeform text, multiple options on separate lines.",
+          properties: {
+            breakfast: { type: "string" },
+            lunch: { type: "string" },
+            dinner: { type: "string" },
           },
         },
       },
@@ -272,6 +290,8 @@ SCHEDULE CHANGES -- prefer the cheap structural tools: for anything about WHEN o
 MAP STOPS -- each day's real-world locations for its map live on the day itself (the 'stops' field), not somewhere else, so they only go stale if you forget to update them. Whenever update_day changes where a day actually goes (overnight, an added/removed stop, a rerouted drive) or insert_day creates a new day, include a full replacement 'stops' array with your best-effort real coordinates for every place visited that day, in order -- flag a stop's ferry:true if the leg to the next stop is a boat crossing, not a road. If a day's locations aren't changing, omit 'stops' entirely and leave it as-is.
 
 CHECKLIST ITEM DATES -- a Ferries/Lodging/Tours checklist item has two different dates: 'due' (the deadline to book it by) and 'dayIds' (which itinerary day(s) it's actually FOR, e.g. the ferry's departure day, every night of a multi-night stay). The Reservations tab sorts "Needs a booking" by dayIds, not due -- always set dayIds on add_todo/update_todo for bookable items when you know which day(s) they're for, even if you also set a due date.
+
+RESTAURANT OPTIONS -- if asked to suggest or note down places to eat for a day, use update_day/insert_day's 'restaurants' field (breakfast/lunch/dinner, freeform text, multiple options one per line) rather than folding restaurant suggestions into 'plan'. Like the day's other fields, this is a full replacement of the object -- include every meal you want kept, not just the one you're changing.
 
 IMPORTANT -- pace yourself on big requests: the server that runs you has its own time limit per reply, separate from your token budget, and a reply that tries to do too much can be cut off with nothing delivered at all. If a request would still mean touching more than about 4-5 days/items with update_day in one go (i.e. real content changes, not just schedule shifts, which the structural tools above already handle cheaply), don't attempt it all in one reply -- propose the first 4-5, briefly say what's left, and let the conversation continue.
 
