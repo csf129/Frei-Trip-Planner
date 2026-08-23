@@ -121,30 +121,87 @@ function linkHost(url) {
   try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
 }
 
-// Nominatim is OpenStreetMap's free geocoder -- no key, same
-// no-billing-required choice as the OSM tiles and OSRM routing. Its usage
-// policy caps callers at roughly one request a second, so this is only
-// ever called on an explicit save (never per keystroke) and the resolved
-// coordinates are stored on the place, making it a one-time cost per
-// address rather than a lookup on every render.
-async function geocodeAddress(address) {
-  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(address)}`;
-  const res = await fetch(url, { headers: { Accept: "application/json" } });
+// Geocoding runs against OpenStreetMap data through two free, no-key
+// services (matching the no-billing-required choice of the OSM tiles and
+// OSRM routing). Photon leads because it searches a fuzzy index and so
+// copes with what real copy-pasted addresses actually look like:
+// abbreviated street types ("Rd"), apostrophes ("Peggy's Cove"), and a
+// trailing postal code. Nominatim matches far more literally -- any one of
+// those three is enough to make it return nothing for an address that is
+// perfectly correct -- so it is only a fallback, and only on a cleaned-up
+// string. Lookups happen on explicit save (never per keystroke) and the
+// coordinates are stored on the place, so it is one lookup per address
+// ever, not one per render.
+async function geocodeViaPhoton(address) {
+  const res = await fetch(`https://photon.komoot.io/api/?limit=1&q=${encodeURIComponent(address)}`);
+  if (!res.ok) throw new Error(`Address lookup failed (${res.status})`);
+  const data = await res.json();
+  const coords = data.features?.[0]?.geometry?.coordinates;
+  if (!coords) throw new Error("No match for that address");
+  return { lat: coords[1], lng: coords[0] };
+}
+async function geocodeViaNominatim(address) {
+  const res = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(address)}`,
+    { headers: { Accept: "application/json" } });
   if (!res.ok) throw new Error(`Address lookup failed (${res.status})`);
   const hits = await res.json();
   if (!hits.length) throw new Error("No match for that address");
   return { lat: +hits[0].lat, lng: +hits[0].lon };
 }
+// Drops the punctuation and postal codes that literal matching trips over.
+// A postal code is only removed after a comma so a leading five-digit
+// house number can't be mistaken for a US ZIP.
+function looseAddress(address) {
+  return address
+    .replace(/[’']/g, "")
+    .replace(/\b[A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d\b/g, "")
+    .replace(/(,\s*)\d{5}(-\d{4})?\b/g, "$1")
+    .replace(/\s*,(\s*,)+/g, ",")
+    .replace(/\s{2,}/g, " ")
+    .replace(/\s*,\s*$/, "")
+    .trim();
+}
+// Keeps only the first and last comma-separated parts -- the place itself
+// and its region. An over-specific part in the middle ("Western Brook
+// Pond, Gros Morne National Park, NL") is a common way for a place that is
+// otherwise perfectly findable to match nothing.
+function shortenAddress(address) {
+  const parts = address.split(",").map((s) => s.trim()).filter(Boolean);
+  return parts.length > 2 ? `${parts[0]}, ${parts[parts.length - 1]}` : "";
+}
+async function geocodeAddress(address) {
+  const loose = looseAddress(address);
+  const queries = [];
+  for (const q of [address, loose, shortenAddress(loose || address)]) {
+    if (q && !queries.includes(q)) queries.push(q);
+  }
+  const attempts = queries.map((q) => () => geocodeViaPhoton(q));
+  attempts.push(() => geocodeViaNominatim(loose || address));
+
+  // "No match" is the answer worth reporting: a transport error from one
+  // service shouldn't mask the other one having actually looked and found
+  // nothing, which is what the user can act on.
+  let noMatch = null;
+  let transportErr = null;
+  for (const attempt of attempts) {
+    try { return await attempt(); }
+    catch (e) {
+      if (/no match/i.test(e.message)) noMatch = noMatch || e;
+      else transportErr = transportErr || e;
+    }
+  }
+  throw noMatch || transportErr || new Error("No match for that address");
+}
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // Fills in coordinates for any place that has an address but no pin yet,
-// leaving the rest untouched. Sequential + spaced out to stay inside
-// Nominatim's rate limit; a failed lookup just leaves that place unpinned.
+// leaving the rest untouched. Sequential and spaced out to stay polite to
+// a free shared service; a failed lookup just leaves that place unpinned.
 async function geocodePlaces(list) {
   const out = [];
   let looked = 0;
   for (const p of list) {
     if (p.address && !placeHasPin(p)) {
-      if (looked++) await sleep(1100);
+      if (looked++) await sleep(400);
       try { out.push({ ...p, ...(await geocodeAddress(p.address)) }); continue; }
       catch { /* keep it, just without a map pin */ }
     }
