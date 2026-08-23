@@ -1365,7 +1365,16 @@ function ReservationEditModal({ reservation, onClose, onSave, onDelete, t, trip 
     setBusy(true);
     setStatus("Uploading…");
     try {
-      const path = `${trip.id}/${uid()}-${file.name}`;
+      // Storage keys must stay ASCII-safe -- real-world filenames (email
+      // exports, phone screenshots) routinely carry smart dashes/quotes,
+      // accents, or emoji that Supabase Storage's key validation rejects
+      // outright ("Invalid key"). The original name isn't shown anywhere
+      // in the UI, so there's nothing to preserve -- derive the key from a
+      // random id and (if it looks like a plain extension) the file's
+      // extension only, never the freeform name itself.
+      const extMatch = file.name.match(/\.([a-zA-Z0-9]{1,8})$/);
+      const ext = extMatch ? `.${extMatch[1].toLowerCase()}` : "";
+      const path = `${trip.id}/${uid()}${ext}`;
       const { error: upErr } = await supabase.storage.from("reservation-files").upload(path, file, { upsert: false });
       if (upErr) throw upErr;
       setStatus("Reading with AI…");
