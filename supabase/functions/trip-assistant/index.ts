@@ -31,6 +31,30 @@ const CORS_HEADERS = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// One restaurant option or thing-to-do hanging off a day. Shared by the
+// restaurants and activities fields on both day tools.
+const PLACE_SCHEMA = {
+  type: "object",
+  properties: {
+    name: { type: "string", description: "What the place is called" },
+    address: { type: "string", description: "Street address. Give a real, complete one where you can -- the app geocodes it to drop a pin on the day's map. Leave empty rather than guessing." },
+    links: {
+      type: "array",
+      description: "Any relevant links (menu, booking page, review, map listing)",
+      items: {
+        type: "object",
+        properties: {
+          label: { type: "string", description: "Short label, e.g. 'Menu'. Optional -- the site's domain is shown if omitted." },
+          url: { type: "string" },
+        },
+        required: ["url"],
+      },
+    },
+    notes: { type: "string", description: "Anything useful: hours, price, why it's worth it, kid-friendliness" },
+  },
+  required: ["name"],
+};
+
 const TOOLS = [
   {
     name: "update_day",
@@ -66,12 +90,17 @@ const TOOLS = [
         },
         restaurants: {
           type: "object",
-          description: "Full replacement of this day's restaurant option notes, by meal -- like the other fields here, this replaces the whole object, so include every meal you want kept (not just the one changing), each as freeform text with multiple options on separate lines.",
+          description: "Full replacement of this day's restaurant options, grouped by meal. Like the other fields here this replaces the whole object, so include every meal you want kept, not just the one changing.",
           properties: {
-            breakfast: { type: "string" },
-            lunch: { type: "string" },
-            dinner: { type: "string" },
+            breakfast: { type: "array", items: PLACE_SCHEMA },
+            lunch: { type: "array", items: PLACE_SCHEMA },
+            dinner: { type: "array", items: PLACE_SCHEMA },
           },
+        },
+        activities: {
+          type: "array",
+          description: "Full replacement of this day's 'things to do' list (sights, activities, stops worth making). Separate from 'plan', which is the day's narrative schedule.",
+          items: PLACE_SCHEMA,
         },
       },
       required: ["dayId"],
@@ -133,12 +162,17 @@ const TOOLS = [
         },
         restaurants: {
           type: "object",
-          description: "Restaurant option notes for this new day, by meal. Each is freeform text, multiple options on separate lines.",
+          description: "Restaurant options for this new day, grouped by meal.",
           properties: {
-            breakfast: { type: "string" },
-            lunch: { type: "string" },
-            dinner: { type: "string" },
+            breakfast: { type: "array", items: PLACE_SCHEMA },
+            lunch: { type: "array", items: PLACE_SCHEMA },
+            dinner: { type: "array", items: PLACE_SCHEMA },
           },
+        },
+        activities: {
+          type: "array",
+          description: "'Things to do' for this new day -- sights, activities and stops worth making, separate from the narrative 'plan'.",
+          items: PLACE_SCHEMA,
         },
       },
       required: ["title", "overnight"],
@@ -291,7 +325,7 @@ MAP STOPS -- each day's real-world locations for its map live on the day itself 
 
 CHECKLIST ITEM DATES -- a Ferries/Lodging/Tours checklist item has two different dates: 'due' (the deadline to book it by) and 'dayIds' (which itinerary day(s) it's actually FOR, e.g. the ferry's departure day, every night of a multi-night stay). The Reservations tab sorts "Needs a booking" by dayIds, not due -- always set dayIds on add_todo/update_todo for bookable items when you know which day(s) they're for, even if you also set a due date.
 
-RESTAURANT OPTIONS -- if asked to suggest or note down places to eat for a day, use update_day/insert_day's 'restaurants' field (breakfast/lunch/dinner, freeform text, multiple options one per line) rather than folding restaurant suggestions into 'plan'. Like the day's other fields, this is a full replacement of the object -- include every meal you want kept, not just the one you're changing.
+RESTAURANTS AND THINGS TO DO -- these are structured lists on the day, not prose in 'plan'. Places to eat go in 'restaurants' (grouped into breakfast/lunch/dinner); sights, activities and worthwhile stops go in 'activities'. Each entry takes a name, an optional street address, optional links and notes. Give a real complete address whenever you're confident of it -- the app geocodes it and drops a pin on that day's map, which is most of the value of these lists; leave it empty rather than inventing one. Both fields fully replace what's there, so include the entries you want kept, not just the new ones.
 
 IMPORTANT -- pace yourself on big requests: the server that runs you has its own time limit per reply, separate from your token budget, and a reply that tries to do too much can be cut off with nothing delivered at all. If a request would still mean touching more than about 4-5 days/items with update_day in one go (i.e. real content changes, not just schedule shifts, which the structural tools above already handle cheaply), don't attempt it all in one reply -- propose the first 4-5, briefly say what's left, and let the conversation continue.
 

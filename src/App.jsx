@@ -8,9 +8,10 @@ import {
   DollarSign, Clock, Luggage, Camera, Flag, Info, Heart,
   Save, ListChecks, LayoutDashboard, ChevronDown, Ticket, Upload, Loader2, Plane,
   Sparkles, Send, Check, ImagePlus, CreditCard, Coffee, Utensils, UtensilsCrossed,
+  MapPin, Link as LinkIcon,
 } from "lucide-react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RTooltip } from "recharts";
-import { MapContainer, TileLayer, Marker, Tooltip as LeafletTooltip, Polyline } from "react-leaflet";
+import { MapContainer, TileLayer, Marker, Tooltip as LeafletTooltip, Polyline, useMap } from "react-leaflet";
 import L from "leaflet";
 import markerIcon2x from "leaflet/dist/images/marker-icon-2x.png";
 import markerIcon from "leaflet/dist/images/marker-icon.png";
@@ -86,8 +87,71 @@ function RichText({ html, className, style }) {
   if (!safe) return null;
   return <div className={className} style={style} dangerouslySetInnerHTML={{ __html: safe }} />;
 }
-const blankRestaurants = () => ({ breakfast: "", lunch: "", dinner: "" });
-const restaurantsOf = (day) => day.restaurants || blankRestaurants();
+/* ---- Places attached to a day: restaurant options and things to do ---- */
+const MEALS = [
+  { key: "breakfast", label: "Breakfast / coffee", Icon: Coffee },
+  { key: "lunch", label: "Lunch", Icon: Utensils },
+  { key: "dinner", label: "Dinner", Icon: UtensilsCrossed },
+];
+const blankPlace = () => ({ id: uid(), name: "", address: "", links: [], notes: "", lat: null, lng: null });
+const blankLink = () => ({ id: uid(), label: "", url: "" });
+const placeHasPin = (p) => typeof p.lat === "number" && typeof p.lng === "number";
+
+// Restaurant notes started out as one free-text blob per meal ("one option
+// per line"). Anything still in that shape is read as one place per line,
+// lifting any URLs in the line out into real links -- so old days keep
+// rendering, and get rewritten into the structured shape the first time
+// that day is saved. No migration pass over the shared blob needed.
+function placesFromLegacyText(text) {
+  const re = () => new RegExp(URL_RE.source, "gi");
+  return String(text).split("\n").map((l) => l.trim()).filter(Boolean).map((line) => {
+    const urls = line.match(re()) || [];
+    const name = line.replace(re(), "").replace(/\s{2,}/g, " ").trim();
+    return { ...blankPlace(), name: name || urls[0] || "", links: urls.map((url) => ({ ...blankLink(), url })) };
+  });
+}
+function asPlaceList(v) {
+  if (Array.isArray(v)) return v;
+  if (typeof v === "string" && v.trim()) return placesFromLegacyText(v);
+  return [];
+}
+const restaurantsOf = (day) => Object.fromEntries(MEALS.map((m) => [m.key, asPlaceList(day.restaurants?.[m.key])]));
+const activitiesOf = (day) => asPlaceList(day.activities);
+function linkHost(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return url; }
+}
+
+// Nominatim is OpenStreetMap's free geocoder -- no key, same
+// no-billing-required choice as the OSM tiles and OSRM routing. Its usage
+// policy caps callers at roughly one request a second, so this is only
+// ever called on an explicit save (never per keystroke) and the resolved
+// coordinates are stored on the place, making it a one-time cost per
+// address rather than a lookup on every render.
+async function geocodeAddress(address) {
+  const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q=${encodeURIComponent(address)}`;
+  const res = await fetch(url, { headers: { Accept: "application/json" } });
+  if (!res.ok) throw new Error(`Address lookup failed (${res.status})`);
+  const hits = await res.json();
+  if (!hits.length) throw new Error("No match for that address");
+  return { lat: +hits[0].lat, lng: +hits[0].lon };
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Fills in coordinates for any place that has an address but no pin yet,
+// leaving the rest untouched. Sequential + spaced out to stay inside
+// Nominatim's rate limit; a failed lookup just leaves that place unpinned.
+async function geocodePlaces(list) {
+  const out = [];
+  let looked = 0;
+  for (const p of list) {
+    if (p.address && !placeHasPin(p)) {
+      if (looked++) await sleep(1100);
+      try { out.push({ ...p, ...(await geocodeAddress(p.address)) }); continue; }
+      catch { /* keep it, just without a map pin */ }
+    }
+    out.push(p);
+  }
+  return out;
+}
 
 /* ------------------------------------------------------------------ */
 /*  THEME                                                              */
@@ -783,9 +847,41 @@ async function fetchRoadRoute(points) {
   return geometry.map(([lng, lat]) => [lat, lng]);
 }
 
-function DayMap({ t, stops, planPreview }) {
+// react-leaflet only reads `bounds` when the map first mounts, so pins
+// added later (a newly geocoded restaurant) would otherwise land outside
+// the view with no way back except manual panning.
+function FitBounds({ bounds }) {
+  const map = useMap();
+  const key = JSON.stringify(bounds);
+  useEffect(() => {
+    if (bounds.length) map.fitBounds(bounds, { padding: [28, 28], maxZoom: 14 });
+  }, [key]);
+  return null;
+}
+
+const pinIcon = (bg, glyph) => L.divIcon({
+  className: "",
+  html: `<div style="background:${bg};width:22px;height:22px;border-radius:50%;display:flex;align-items:center;
+    justify-content:center;font-size:11px;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.45)">${glyph}</div>`,
+  iconSize: [22, 22], iconAnchor: [11, 11],
+});
+
+function PinToggle({ t, on, onClick, color, label, count }) {
+  return (
+    <button onClick={onClick} title={on ? `Hide ${label} on the map` : `Show ${label} on the map`}
+      className="inline-flex items-center gap-1 rounded-full px-2 py-0.5"
+      style={{ fontSize: 10.5, fontWeight: 700, border: `1px solid ${on ? color : t.line}`,
+        background: on ? color : "transparent", color: on ? "#fff" : t.sub, opacity: on ? 1 : .8 }}>
+      <span style={{ fontSize: 9 }}>{on ? "●" : "○"}</span> {label} {count}
+    </button>
+  );
+}
+
+function DayMap({ t, stops, planPreview, foodPins = [], todoPins = [] }) {
   const segments = useMemo(() => (stops && stops.length > 1 ? buildMapSegments(stops) : []), [stops]);
   const [roadGeometry, setRoadGeometry] = useState({});
+  const [showFood, setShowFood] = useState(true);
+  const [showTodo, setShowTodo] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -798,37 +894,76 @@ function DayMap({ t, stops, planPreview }) {
     return () => { cancelled = true; };
   }, [segments]);
 
-  if (!stops || stops.length === 0) return null;
-  const bounds = stops.map((s) => [s.lat, s.lng]);
+  const routeStops = stops || [];
+  // Bounds cover every pin whether or not it's currently shown, so toggling
+  // a layer off doesn't zoom the map around underneath you.
+  const bounds = [...routeStops, ...foodPins, ...todoPins].map((s) => [s.lat, s.lng]);
+  if (bounds.length === 0) return null;
+
+  const openInGoogleMaps = (lat, lng) => window.open(`https://www.google.com/maps/search/?api=1&query=${lat},${lng}`, "_blank", "noopener");
+
   return (
-    <div className="rounded-2xl overflow-hidden sm:w-1/2 flex-shrink-0" style={{ height: 200, border: `1px solid ${t.line}`, position: "relative", zIndex: 0 }}>
-      <MapContainer bounds={bounds} boundsOptions={{ padding: [28, 28] }} scrollWheelZoom={false} style={{ height: "100%", width: "100%" }}>
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
-        {segments.map((seg, i) => {
-          const straight = seg.points.map((p) => [p.lat, p.lng]);
-          if (seg.type === "ferry") {
-            return <Polyline key={i} positions={straight} pathOptions={{ color: t.water, weight: 3, dashArray: "2 8" }} />;
-          }
-          const geo = roadGeometry[i];
-          const onRoad = Array.isArray(geo);
-          return <Polyline key={i} positions={onRoad ? geo : straight} pathOptions={{ color: t.primary, weight: 3, dashArray: onRoad ? undefined : "6 8" }} />;
-        })}
-        {stops.map((s, i) => (
-          <Marker key={i} position={[s.lat, s.lng]}
-            eventHandlers={{ click: () => window.open(`https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lng}`, "_blank", "noopener") }}>
-            <LeafletTooltip direction="top" offset={[0, -30]}>
-              <div style={{ maxWidth: 200 }}>
-                <div style={{ fontWeight: 700 }}>{s.name}</div>
-                {planPreview && <div style={{ fontSize: 11, marginTop: 2 }}>{planPreview}</div>}
-                <div style={{ fontSize: 10.5, marginTop: 3, opacity: .75 }}>Click for Google Maps →</div>
-              </div>
-            </LeafletTooltip>
-          </Marker>
-        ))}
-      </MapContainer>
+    <div className="sm:w-1/2 flex-shrink-0">
+      {(foodPins.length > 0 || todoPins.length > 0) && (
+        <div className="flex flex-wrap items-center justify-end gap-1.5 mb-1.5">
+          {foodPins.length > 0 && <PinToggle t={t} on={showFood} onClick={() => setShowFood((v) => !v)} color={t.accent} label="Food" count={foodPins.length} />}
+          {todoPins.length > 0 && <PinToggle t={t} on={showTodo} onClick={() => setShowTodo((v) => !v)} color={t.water} label="To do" count={todoPins.length} />}
+        </div>
+      )}
+      <div className="rounded-2xl overflow-hidden" style={{ height: 200, border: `1px solid ${t.line}`, position: "relative", zIndex: 0 }}>
+        <MapContainer bounds={bounds} boundsOptions={{ padding: [28, 28] }} scrollWheelZoom={false} style={{ height: "100%", width: "100%" }}>
+          <FitBounds bounds={bounds} />
+          <TileLayer
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+          {segments.map((seg, i) => {
+            const straight = seg.points.map((p) => [p.lat, p.lng]);
+            if (seg.type === "ferry") {
+              return <Polyline key={i} positions={straight} pathOptions={{ color: t.water, weight: 3, dashArray: "2 8" }} />;
+            }
+            const geo = roadGeometry[i];
+            const onRoad = Array.isArray(geo);
+            return <Polyline key={i} positions={onRoad ? geo : straight} pathOptions={{ color: t.primary, weight: 3, dashArray: onRoad ? undefined : "6 8" }} />;
+          })}
+          {routeStops.map((s, i) => (
+            <Marker key={`stop${i}`} position={[s.lat, s.lng]}
+              eventHandlers={{ click: () => openInGoogleMaps(s.lat, s.lng) }}>
+              <LeafletTooltip direction="top" offset={[0, -30]}>
+                <div style={{ maxWidth: 200 }}>
+                  <div style={{ fontWeight: 700 }}>{s.name}</div>
+                  {planPreview && <div style={{ fontSize: 11, marginTop: 2 }}>{planPreview}</div>}
+                  <div style={{ fontSize: 10.5, marginTop: 3, opacity: .75 }}>Click for Google Maps →</div>
+                </div>
+              </LeafletTooltip>
+            </Marker>
+          ))}
+          {showFood && foodPins.map((p) => (
+            <Marker key={p.id} position={[p.lat, p.lng]} icon={pinIcon(t.accent, "🍴")}
+              eventHandlers={{ click: () => openInGoogleMaps(p.lat, p.lng) }}>
+              <LeafletTooltip direction="top" offset={[0, -14]}>
+                <div style={{ maxWidth: 200 }}>
+                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: .3, opacity: .7 }}>{p.mealLabel}</div>
+                  <div style={{ fontWeight: 700 }}>{p.name || "Restaurant"}</div>
+                  {p.address && <div style={{ fontSize: 11, marginTop: 2 }}>{p.address}</div>}
+                </div>
+              </LeafletTooltip>
+            </Marker>
+          ))}
+          {showTodo && todoPins.map((p) => (
+            <Marker key={p.id} position={[p.lat, p.lng]} icon={pinIcon(t.water, "★")}
+              eventHandlers={{ click: () => openInGoogleMaps(p.lat, p.lng) }}>
+              <LeafletTooltip direction="top" offset={[0, -14]}>
+                <div style={{ maxWidth: 200 }}>
+                  <div style={{ fontSize: 10, textTransform: "uppercase", letterSpacing: .3, opacity: .7 }}>To do</div>
+                  <div style={{ fontWeight: 700 }}>{p.name || "Activity"}</div>
+                  {p.address && <div style={{ fontSize: 11, marginTop: 2 }}>{p.address}</div>}
+                </div>
+              </LeafletTooltip>
+            </Marker>
+          ))}
+        </MapContainer>
+      </div>
     </div>
   );
 }
@@ -838,12 +973,33 @@ function DayMap({ t, stops, planPreview }) {
 /* ------------------------------------------------------------------ */
 function Itinerary({ t, trip, updateTrip, canEdit, setView, setFocusReservationId }) {
   const [editDay, setEditDay] = useState(null);
+  // { dayId, meal | null, place, isNew } -- `meal` null means a "thing to do"
+  const [editPlace, setEditPlace] = useState(null);
   if (!trip) return null;
 
   const saveDay = (day) => {
     updateTrip({ days: trip.days.map((d) => d.id === day.id ? day : d) });
     setEditDay(null);
   };
+
+  // Writes one place back into its day. Reading through restaurantsOf /
+  // activitiesOf first means a day still holding the old free-text notes
+  // gets converted to the structured shape as a side effect of this save.
+  const writePlace = (mutate) => {
+    const { dayId, meal } = editPlace;
+    updateTrip({
+      days: trip.days.map((d) => {
+        if (d.id !== dayId) return d;
+        if (meal === null) return { ...d, activities: mutate(activitiesOf(d)) };
+        const rst = restaurantsOf(d);
+        return { ...d, restaurants: { ...rst, [meal]: mutate(rst[meal]) } };
+      }),
+    });
+    setEditPlace(null);
+  };
+  const savePlace = (next) => writePlace((list) =>
+    editPlace.isNew ? [...list, next] : list.map((x) => x.id === next.id ? next : x));
+  const deletePlace = () => writePlace((list) => list.filter((x) => x.id !== editPlace.place.id));
 
   const goToReservations = (dayReservations) => {
     if (dayReservations.length === 1) setFocusReservationId(dayReservations[0].id);
@@ -856,7 +1012,13 @@ function Itinerary({ t, trip, updateTrip, canEdit, setView, setFocusReservationI
       {trip.days.map((d) => {
         const dayReservations = (trip.reservations || []).filter((r) => reservationDayIds(r).includes(d.id));
         const rst = restaurantsOf(d);
-        const hasRestaurants = rst.breakfast || rst.lunch || rst.dinner;
+        const acts = activitiesOf(d);
+        const foodPins = MEALS.flatMap((m) => rst[m.key].filter(placeHasPin).map((p) => ({ ...p, mealLabel: m.label })));
+        const todoPins = acts.filter(placeHasPin);
+        const showFoodBlock = canEdit || MEALS.some((m) => rst[m.key].length > 0);
+        const showTodoBlock = canEdit || acts.length > 0;
+        const addPlace = (meal) => setEditPlace({ dayId: d.id, meal, place: blankPlace(), isNew: true });
+        const openPlace = (meal, place) => setEditPlace({ dayId: d.id, meal, place, isNew: false });
         return (
         <Card key={d.id} t={t}>
           <div className="px-4 pt-3.5 pb-3">
@@ -907,31 +1069,24 @@ function Itinerary({ t, trip, updateTrip, canEdit, setView, setFocusReservationI
                   </div>
                 )}
 
-                {hasRestaurants && (
-                  <div className="mt-3 rounded-2xl px-3 py-2.5 space-y-1.5" style={{ background: t.paper2, border: `1px solid ${t.line}` }}>
-                    {rst.breakfast && (
-                      <div className="flex gap-2">
-                        <Coffee size={13} color={t.accent} style={{ flexShrink: 0, marginTop: 2 }} />
-                        <Linkified text={rst.breakfast} preLine style={{ fontSize: 12, color: t.ink, lineHeight: 1.4 }} />
-                      </div>
-                    )}
-                    {rst.lunch && (
-                      <div className="flex gap-2">
-                        <Utensils size={13} color={t.accent} style={{ flexShrink: 0, marginTop: 2 }} />
-                        <Linkified text={rst.lunch} preLine style={{ fontSize: 12, color: t.ink, lineHeight: 1.4 }} />
-                      </div>
-                    )}
-                    {rst.dinner && (
-                      <div className="flex gap-2">
-                        <UtensilsCrossed size={13} color={t.accent} style={{ flexShrink: 0, marginTop: 2 }} />
-                        <Linkified text={rst.dinner} preLine style={{ fontSize: 12, color: t.ink, lineHeight: 1.4 }} />
-                      </div>
-                    )}
+                {showFoodBlock && (
+                  <div className="mt-3 rounded-2xl px-3 py-2.5 space-y-2.5" style={{ background: t.paper2, border: `1px solid ${t.line}` }}>
+                    {MEALS.map((m) => (
+                      <PlaceSection key={m.key} t={t} Icon={m.Icon} label={m.label} accent={t.accent} places={rst[m.key]}
+                        canEdit={canEdit} onAdd={() => addPlace(m.key)} onEdit={(p) => openPlace(m.key, p)} />
+                    ))}
+                  </div>
+                )}
+
+                {showTodoBlock && (
+                  <div className="mt-2 rounded-2xl px-3 py-2.5" style={{ background: t.paper2, border: `1px solid ${t.line}` }}>
+                    <PlaceSection t={t} Icon={Compass} label="Things to do" accent={t.water} places={acts}
+                      canEdit={canEdit} onAdd={() => addPlace(null)} onEdit={(p) => openPlace(null, p)} />
                   </div>
                 )}
               </div>
 
-              <DayMap t={t} stops={d.stops} planPreview={planPreviewText(d.plan)} />
+              <DayMap t={t} stops={d.stops} planPreview={planPreviewText(d.plan)} foodPins={foodPins} todoPins={todoPins} />
             </div>
           </div>
         </Card>
@@ -939,6 +1094,194 @@ function Itinerary({ t, trip, updateTrip, canEdit, setView, setFocusReservationI
       })}
 
       <DayEditModal day={editDay} onClose={() => setEditDay(null)} onSave={saveDay} t={t} />
+      <PlaceEditModal t={t} entry={editPlace} onClose={() => setEditPlace(null)} onSave={savePlace} onDelete={deletePlace} />
+    </div>
+  );
+}
+
+function PlaceSection({ t, Icon, label, accent, places, canEdit, onAdd, onEdit }) {
+  if (!canEdit && places.length === 0) return null;
+  return (
+    <div>
+      <div className="flex items-center gap-1.5">
+        <Icon size={13} color={accent} style={{ flexShrink: 0 }} />
+        <span style={{ fontSize: 10.5, fontWeight: 700, color: t.sub, textTransform: "uppercase", letterSpacing: .4 }}>{label}</span>
+        {canEdit && (
+          <button onClick={onAdd} className="ml-auto inline-flex items-center gap-1 rounded-full px-2 py-0.5"
+            style={{ fontSize: 10.5, fontWeight: 700, color: t.primaryDark, background: t.primarySoft }}>
+            <Plus size={11} /> Add
+          </button>
+        )}
+      </div>
+      {places.length === 0 ? (
+        <div style={{ fontSize: 11.5, color: t.sub, opacity: .65, marginTop: 3 }}>Nothing added yet.</div>
+      ) : (
+        <div className="space-y-1.5 mt-1.5">
+          {places.map((p) => <PlaceRow key={p.id} p={p} t={t} canEdit={canEdit} onEdit={() => onEdit(p)} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PlaceRow({ p, t, canEdit, onEdit }) {
+  const links = (p.links || []).filter((l) => l.url);
+  return (
+    <div className="rounded-xl px-2.5 py-2 flex items-start gap-2" style={{ background: t.card, border: `1px solid ${t.line}` }}>
+      <div className="flex-1 min-w-0">
+        <div style={{ fontSize: 12.5, fontWeight: 600, color: t.ink }}>{p.name || "Untitled"}</div>
+        {p.address && (
+          <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.address)}`} target="_blank" rel="noopener noreferrer"
+            className="inline-flex items-start gap-1 mt-0.5" style={{ fontSize: 11, color: t.sub }}>
+            <MapPin size={10} style={{ flexShrink: 0, marginTop: 2 }} />
+            <span>{p.address}{placeHasPin(p) ? "" : " · not pinned"}</span>
+          </a>
+        )}
+        {links.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            {links.map((l) => (
+              <a key={l.id} href={l.url} target="_blank" rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 rounded-full px-2 py-0.5"
+                style={{ fontSize: 10.5, fontWeight: 600, background: t.waterSoft, color: t.water, maxWidth: "100%" }}>
+                <LinkIcon size={9} style={{ flexShrink: 0 }} />
+                <span className="truncate">{l.label || linkHost(l.url)}</span>
+              </a>
+            ))}
+          </div>
+        )}
+        {p.notes && <Linkified text={p.notes} preLine style={{ fontSize: 11.5, color: t.sub, marginTop: 3, lineHeight: 1.4, display: "block" }} />}
+      </div>
+      {canEdit && <button onClick={onEdit} style={{ color: t.sub, flexShrink: 0 }}><Pencil size={13} /></button>}
+    </div>
+  );
+}
+
+function PlaceFields({ p, setP, t }) {
+  const links = p.links || [];
+  const setLink = (id, patch) => setP({ ...p, links: links.map((l) => l.id === id ? { ...l, ...patch } : l) });
+  return (
+    <>
+      <Field label="Name" t={t}>
+        <input style={inputStyle(t)} value={p.name} placeholder="e.g. Hunky Doryns"
+          onChange={(e) => setP({ ...p, name: e.target.value })} />
+      </Field>
+      <Field label="Address (pins it on the day's map)" t={t}>
+        <input style={inputStyle(t)} value={p.address} placeholder="123 Main St, Lunenburg, NS"
+          onChange={(e) => setP({ ...p, address: e.target.value, lat: null, lng: null })} />
+      </Field>
+      <div className="mb-3">
+        <span className="block mb-1.5" style={{ fontSize: 12.5, fontWeight: 600, color: t.sub, letterSpacing: .2 }}>Links</span>
+        <div className="space-y-2">
+          {links.map((l) => (
+            <div key={l.id} className="flex gap-2 items-center">
+              <input style={{ ...inputStyle(t), flex: "0 0 34%" }} value={l.label} placeholder="Label (optional)"
+                onChange={(e) => setLink(l.id, { label: e.target.value })} />
+              <input style={inputStyle(t)} value={l.url} placeholder="https://…"
+                onChange={(e) => setLink(l.id, { url: e.target.value })} />
+              <button type="button" onClick={() => setP({ ...p, links: links.filter((x) => x.id !== l.id) })}
+                style={{ color: t.sub, flexShrink: 0 }}><Trash2 size={15} /></button>
+            </div>
+          ))}
+        </div>
+        <button type="button" onClick={() => setP({ ...p, links: [...links, blankLink()] })}
+          className="inline-flex items-center gap-1 mt-2" style={{ fontSize: 12.5, fontWeight: 600, color: t.primary }}>
+          <Plus size={13} /> Add another link
+        </button>
+      </div>
+      <Field label="Notes" t={t}>
+        <textarea style={{ ...inputStyle(t), minHeight: 62, resize: "vertical" }} value={p.notes}
+          onChange={(e) => setP({ ...p, notes: e.target.value })} />
+      </Field>
+    </>
+  );
+}
+
+const cleanPlace = (p) => ({
+  ...p,
+  name: p.name.trim(),
+  address: p.address.trim(),
+  links: (p.links || []).filter((l) => l.url.trim()).map((l) => ({ ...l, label: l.label.trim(), url: l.url.trim() })),
+});
+
+function PlaceEditModal({ t, entry, onClose, onSave, onDelete }) {
+  const [p, setP] = useState(entry?.place);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("");
+  // Set once a lookup has already failed, so a second Save saves the place
+  // anyway (just without a map pin) instead of retrying the same address.
+  const [skipLookup, setSkipLookup] = useState(false);
+  useEffect(() => { setP(entry?.place); setStatus(""); setSkipLookup(false); }, [entry]);
+  if (!entry || !p) return null;
+
+  const meal = MEALS.find((m) => m.key === entry.meal);
+  const what = meal ? meal.label : "thing to do";
+
+  const save = async () => {
+    const next = cleanPlace(p);
+    if (!next.name && !next.address) return;
+    if (next.address && !placeHasPin(next) && !skipLookup) {
+      setBusy(true);
+      setStatus("Looking up the address…");
+      try {
+        Object.assign(next, await geocodeAddress(next.address));
+      } catch (e) {
+        setBusy(false);
+        setSkipLookup(true);
+        setStatus(`${e.message}. Save again to keep it without a map pin.`);
+        return;
+      }
+      setBusy(false);
+    }
+    onSave(next);
+  };
+
+  return (
+    <Modal open={!!entry} onClose={onClose} title={`${entry.isNew ? "Add" : "Edit"} — ${what}`} t={t} wide>
+      <PlaceFields p={p} setP={setP} t={t} />
+      {status && <div style={{ fontSize: 11.5, color: t.sub, marginBottom: 8 }}>{status}</div>}
+      <div className="flex justify-between items-center mt-2">
+        {entry.isNew ? <span /> : <Btn t={t} kind="danger" small onClick={onDelete}><Trash2 size={14} /> Delete</Btn>}
+        <div className="flex gap-2">
+          <Btn t={t} kind="ghost" onClick={onClose}>Cancel</Btn>
+          <Btn t={t} onClick={busy ? undefined : save}>
+            {busy ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} {busy ? "Saving…" : "Save"}
+          </Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// Inline equivalent of PlaceEditModal for use inside the day editor, where
+// a second stacked modal would fight the first one for the backdrop click.
+function PlaceListEditor({ t, Icon, label, places, onChange }) {
+  const [openId, setOpenId] = useState(null);
+  const add = () => { const p = blankPlace(); onChange([...places, p]); setOpenId(p.id); };
+  return (
+    <div className="mb-3">
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <Icon size={13} color={t.accent} />
+        <span style={{ fontSize: 12.5, fontWeight: 600, color: t.sub }}>{label}</span>
+        <button type="button" onClick={add} className="ml-auto inline-flex items-center gap-1 rounded-full px-2 py-0.5"
+          style={{ fontSize: 11, fontWeight: 700, color: t.primaryDark, background: t.primarySoft }}>
+          <Plus size={11} /> Add
+        </button>
+      </div>
+      {places.length === 0 && <div style={{ fontSize: 11.5, color: t.sub, opacity: .65 }}>Nothing added yet.</div>}
+      {places.map((p) => (
+        <div key={p.id} className="rounded-xl px-2.5 py-2 mb-1.5" style={{ border: `1px solid ${t.line}`, background: "#fff" }}>
+          <div className="flex items-center gap-2">
+            <span className="flex-1 truncate" style={{ fontSize: 12.5, color: t.ink }}>{p.name || p.address || "Untitled"}</span>
+            <button type="button" onClick={() => setOpenId(openId === p.id ? null : p.id)} style={{ color: t.sub }}><Pencil size={13} /></button>
+            <button type="button" onClick={() => onChange(places.filter((x) => x.id !== p.id))} style={{ color: t.sub }}><Trash2 size={13} /></button>
+          </div>
+          {openId === p.id && (
+            <div className="mt-2 pt-2" style={{ borderTop: `1px solid ${t.line}` }}>
+              <PlaceFields p={p} setP={(np) => onChange(places.map((x) => x.id === p.id ? np : x))} t={t} />
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
@@ -965,12 +1308,28 @@ const QUILL_MODULES = {
 const QUILL_FORMATS = ["bold", "italic", "strike", "color", "background", "link", "list", "indent"];
 
 function DayEditModal({ day, onClose, onSave, t }) {
-  const [d, setD] = useState(day);
+  const [d, setD] = useState(null);
   const [planHtml, setPlanHtml] = useState("");
-  useEffect(() => { setD(day); setPlanHtml(planToHtml(day?.plan)); }, [day]);
+  const [busy, setBusy] = useState(false);
+  // Normalize the day's places up front so everything below can assume the
+  // structured array shape, whatever the stored day still looks like.
+  useEffect(() => {
+    setD(day ? { ...day, restaurants: restaurantsOf(day), activities: activitiesOf(day) } : null);
+    setPlanHtml(planToHtml(day?.plan));
+    setBusy(false);
+  }, [day]);
   if (!day || !d) return null;
-  const rst = restaurantsOf(d);
+  const rst = d.restaurants;
   const setRestaurant = (meal, v) => setD({ ...d, restaurants: { ...rst, [meal]: v } });
+
+  const save = async () => {
+    setBusy(true);
+    const restaurants = {};
+    for (const m of MEALS) restaurants[m.key] = await geocodePlaces(rst[m.key].map(cleanPlace));
+    const activities = await geocodePlaces(d.activities.map(cleanPlace));
+    onSave({ ...d, plan: sanitizeRichHtml(normalizeQuillHtml(planHtml)), restaurants, activities });
+  };
+
   return (
     <Modal open={!!day} onClose={onClose} title={`Edit Day ${d.n}`} t={t} wide>
       <Field label="Title" t={t}><input style={inputStyle(t)} value={d.title} onChange={(e) => setD({ ...d, title: e.target.value })} /></Field>
@@ -987,22 +1346,22 @@ function DayEditModal({ day, onClose, onSave, t }) {
           <ReactQuill theme="snow" value={planHtml} onChange={setPlanHtml} modules={QUILL_MODULES} formats={QUILL_FORMATS} />
         </div>
       </Field>
-      <div style={{ fontFamily: "Georgia, serif", fontSize: 15, color: t.ink, marginTop: 14, marginBottom: 6 }}>Restaurant options</div>
-      <Field label="Breakfast / coffee" t={t}>
-        <textarea style={{ ...inputStyle(t), minHeight: 54, resize: "vertical" }} value={rst.breakfast} placeholder="One option per line — names, links, notes"
-          onChange={(e) => setRestaurant("breakfast", e.target.value)} />
-      </Field>
-      <Field label="Lunch" t={t}>
-        <textarea style={{ ...inputStyle(t), minHeight: 54, resize: "vertical" }} value={rst.lunch} placeholder="One option per line — names, links, notes"
-          onChange={(e) => setRestaurant("lunch", e.target.value)} />
-      </Field>
-      <Field label="Dinner" t={t}>
-        <textarea style={{ ...inputStyle(t), minHeight: 54, resize: "vertical" }} value={rst.dinner} placeholder="One option per line — names, links, notes"
-          onChange={(e) => setRestaurant("dinner", e.target.value)} />
-      </Field>
-      <div className="flex justify-end gap-2 mt-2">
+      <div style={{ fontFamily: "Georgia, serif", fontSize: 15, color: t.ink, marginTop: 14, marginBottom: 8 }}>Restaurant options</div>
+      {MEALS.map((m) => (
+        <PlaceListEditor key={m.key} t={t} Icon={m.Icon} label={m.label} places={rst[m.key]}
+          onChange={(v) => setRestaurant(m.key, v)} />
+      ))}
+
+      <div style={{ fontFamily: "Georgia, serif", fontSize: 15, color: t.ink, marginTop: 14, marginBottom: 8 }}>Things to do</div>
+      <PlaceListEditor t={t} Icon={Compass} label="Places & activities" places={d.activities}
+        onChange={(v) => setD({ ...d, activities: v })} />
+
+      <div className="flex items-center justify-end gap-2 mt-2">
+        {busy && <span style={{ fontSize: 11.5, color: t.sub }}>Looking up addresses…</span>}
         <Btn t={t} kind="ghost" onClick={onClose}>Cancel</Btn>
-        <Btn t={t} onClick={() => onSave({ ...d, plan: sanitizeRichHtml(normalizeQuillHtml(planHtml)), restaurants: rst })}><Save size={15} /> Save day</Btn>
+        <Btn t={t} onClick={busy ? undefined : save}>
+          {busy ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />} {busy ? "Saving…" : "Save day"}
+        </Btn>
       </div>
     </Modal>
   );
